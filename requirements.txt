@@ -1,0 +1,5 @@
+torch
+numpy
+tqdm
+matplotlib
+z3-solver
