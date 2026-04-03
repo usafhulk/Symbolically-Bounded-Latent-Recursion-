@@ -105,7 +105,7 @@ class SelfAttention(nn.Module):
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
         attn = F.softmax((q @ k.transpose(-2, -1)) /
                          math.sqrt(self.head_dim), dim=-1)
-        return self.proj((attn @ v).transpose(1, 2).reshape(B, L, D))
+        return self.proj((attn @ v).transpose(1, 2).contiguous().reshape(B, L, D))
 
 
 class TransformerLayer(nn.Module):
@@ -187,13 +187,12 @@ class SudokuHead(TaskHead):
     def compute_loss(self, logits, targets, x_input=None):
         class_targets = targets - 1  # 1-9 -> 0-8
         if x_input is not None:
-            mask = (x_input == 0)
-            logits_flat = logits[mask]
-            targets_flat = class_targets[mask]
-            if targets_flat.numel() == 0:
-                return torch.tensor(0.0, device=logits.device, requires_grad=True)
-            return F.cross_entropy(logits_flat, targets_flat, reduction='mean')
-        return F.cross_entropy(logits.reshape(-1, 9), class_targets.reshape(-1), reduction='mean')
+            class_targets = class_targets.clone()
+            # -100 is the default ignore_index in F.cross_entropy
+            class_targets[x_input != 0] = -100
+
+        # F.cross_entropy expects class dimension to be at index 1: [B, Classes, SeqLen]
+        return F.cross_entropy(logits.transpose(1, 2), class_targets, ignore_index=-100)
 
     def check_correct(self, logits, targets, x_input=None):
         pred = logits.argmax(dim=-1) + 1
@@ -304,19 +303,19 @@ class TinyRecursiveModel(nn.Module):
         self.output_norm = RMSNorm(dim)
         self.q_head = nn.Linear(dim, 1, bias=False)
 
-    def forward_network(self, *inputs):
+    def forward_network(self, x):
         """Apply the shared network to the sum of input tensors."""
-        x = sum(inputs)
         for layer in self.layers:
             x = layer(x)
         return x
 
     def latent_recursion(self, x, y, z):
         """n latent recursions on z, then one y update."""
-
+        xy = x + y  # saving compute by reusing x+y for all recursions
         for _ in range(self.n_recursions):
-            z = self.forward_network(x, y, z)
-        y = self.forward_network(y, z)
+            # only doing one addition within the loop
+            z = self.forward_network(xy + z)
+        y = self.forward_network(y + z)
         return y, z
 
     def deep_recursion(self, x, y, z, with_gradients: bool = False):
@@ -384,9 +383,7 @@ class TinyRecursiveModel(nn.Module):
             for _ in range(self.n_supervision):
                 (y, z), y_hat, q_hat = self.deep_recursion(
                     x, y, z, with_gradients=False)
-
-
-xy                 y, z = y.detach(), z.detach()
+                y, z = y.detach(), z.detach()
                 all_preds.append(y_hat)
 
             return (y_hat, all_preds) if return_all_steps else y_hat
