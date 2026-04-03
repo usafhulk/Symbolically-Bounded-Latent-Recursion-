@@ -226,3 +226,220 @@ def plot_multi_task_per_step(
     else:
         plt.show()
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Z-state evolution plot
+# ---------------------------------------------------------------------------
+
+def plot_z_state_evolution(
+    diagnostics: dict,
+    title: str = 'Z-State Evolution Over Recursive Steps',
+    save_path: Optional[str] = None,
+) -> None:
+    """Plot z-state and y-state L2 norms across supervision steps.
+
+    Shows whether latent representations are stable (bounded norms) or
+    collapsing/exploding (diverging norms). This is the key representation
+    collapse diagnostic.
+
+    Args:
+        diagnostics: Dict from model.diagnostic_forward() with keys
+                     'z_norms', 'y_norms', 'z_cosines'.
+        save_path: If provided, save figure to this path.
+    """
+    if not HAS_MPL:
+        print("matplotlib not installed; skipping z-state plot.")
+        return
+
+    z_norms = diagnostics['z_norms']
+    y_norms = diagnostics['y_norms']
+    z_cosines = diagnostics.get('z_cosines', [])
+    steps = list(range(len(z_norms)))
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+
+    # Panel 1: Z-norm evolution (linear scale)
+    axes[0].plot(steps, z_norms, 'o-', color='steelblue',
+                 linewidth=2, markersize=5)
+    axes[0].set_xlabel('Supervision Step')
+    axes[0].set_ylabel('Mean ||z||')
+    axes[0].set_title('Z-State Norm (linear)')
+    axes[0].grid(True, alpha=0.3)
+
+    # Panel 2: Y-norm evolution
+    axes[1].plot(steps, y_norms, 's-', color='coral',
+                 linewidth=2, markersize=5)
+    axes[1].set_xlabel('Supervision Step')
+    axes[1].set_ylabel('Mean ||y||')
+    axes[1].set_title('Y-State Norm (scratchpad)')
+    axes[1].grid(True, alpha=0.3)
+
+    # Panel 3: Z cosine similarity between consecutive steps
+    if z_cosines:
+        cos_steps = list(range(1, len(z_cosines) + 1))
+        axes[2].plot(cos_steps, z_cosines, 'D-', color='mediumseagreen',
+                     linewidth=2, markersize=5)
+        axes[2].axhline(y=1.0, color='gray', linestyle='--',
+                        alpha=0.5, label='identical')
+        axes[2].set_ylim(-0.1, 1.1)
+        axes[2].legend(fontsize=8)
+    axes[2].set_xlabel('Supervision Step')
+    axes[2].set_ylabel('Cosine Similarity')
+    axes[2].set_title('Z-State Stability (consecutive)')
+    axes[2].grid(True, alpha=0.3)
+
+    fig.suptitle(title, fontsize=13, fontweight='bold')
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Scratchpad (y-state) heatmap
+# ---------------------------------------------------------------------------
+
+def plot_scratchpad_heatmap(
+    diagnostics: dict,
+    title: str = 'Scratchpad (y) Activation Heatmap',
+    save_path: Optional[str] = None,
+) -> None:
+    """Plot heatmap of mean |y| activations: supervision steps vs sequence position.
+
+    This is the failure valley heatmap -- if activations wash out or become
+    uniform across positions at later steps, the model has lost information.
+
+    Args:
+        diagnostics: Dict from model.diagnostic_forward() with 'y_heatmaps'.
+        save_path: If provided, save figure to this path.
+    """
+    if not HAS_MPL:
+        print("matplotlib not installed; skipping scratchpad heatmap.")
+        return
+
+    y_heatmaps = diagnostics['y_heatmaps']
+    heatmap = np.stack(y_heatmaps)  # [n_supervision, seq_len]
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    im = ax.imshow(heatmap.T, aspect='auto',
+                   cmap='RdBu_r', interpolation='nearest')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Sequence Position (cell index)')
+    ax.set_title(title)
+    fig.colorbar(im, ax=ax, label='Mean |y| activation')
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Training curves
+# ---------------------------------------------------------------------------
+
+def plot_training_curves(
+    epoch_losses: List[float],
+    epoch_accs: List[float],
+    val_accs: Optional[List[float]] = None,
+    title: str = 'Training Curves',
+    save_path: Optional[str] = None,
+) -> None:
+    """Plot loss and accuracy over epochs.
+
+    Args:
+        epoch_losses: Average loss per epoch.
+        epoch_accs: Average training accuracy per epoch.
+        val_accs: Validation accuracy per epoch (optional).
+        save_path: If provided, save figure to this path.
+    """
+    if not HAS_MPL:
+        print("matplotlib not installed; skipping training curves.")
+        return
+
+    epochs = list(range(1, len(epoch_losses) + 1))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    # Panel 1: Loss
+    axes[0].plot(epochs, epoch_losses, '-', color='steelblue', linewidth=2)
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+    axes[0].set_title('Training Loss')
+    axes[0].grid(True, alpha=0.3)
+
+    # Panel 2: Accuracy
+    axes[1].plot(epochs, epoch_accs, '-', color='steelblue', linewidth=2,
+                 label='Train')
+    if val_accs:
+        axes[1].plot(epochs[:len(val_accs)], val_accs, '-', color='coral',
+                     linewidth=2, label='Val')
+        axes[1].legend()
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Accuracy')
+    axes[1].set_title('Accuracy')
+    axes[1].set_ylim(-0.05, 1.05)
+    axes[1].grid(True, alpha=0.3)
+
+    fig.suptitle(title, fontsize=13, fontweight='bold')
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Halt confidence curve
+# ---------------------------------------------------------------------------
+
+def plot_halt_confidence(
+    diagnostics: dict,
+    title: str = 'Halt Confidence Over Recursive Steps',
+    save_path: Optional[str] = None,
+) -> None:
+    """Plot halt probability (q_hat) across supervision steps.
+
+    Shows whether the model develops confidence over time. In healthy
+    training, halt probability should increase as reasoning progresses.
+
+    Args:
+        diagnostics: Dict from model.diagnostic_forward() with 'halt_probs'.
+        save_path: If provided, save figure to this path.
+    """
+    if not HAS_MPL:
+        print("matplotlib not installed; skipping halt confidence plot.")
+        return
+
+    halt_probs = diagnostics['halt_probs']
+    steps = list(range(len(halt_probs)))
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(steps, halt_probs, 'o-', color='darkorange',
+            linewidth=2, markersize=6)
+    ax.axhline(y=0.5, color='gray', linestyle='--',
+               alpha=0.5, label='threshold')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Mean Halt Probability (q_hat)')
+    ax.set_title(title)
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)

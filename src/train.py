@@ -165,6 +165,7 @@ class TRMTrainer:
 
     def train(self, num_epochs: int):
         print(f"Task: {self.task}  |  Device: {self.device}")
+        self.epoch_history = {'loss': [], 'accuracy': [], 'val_accuracy': []}
 
         for epoch in range(num_epochs):
             metrics = {'loss': [], 'accuracy': [],
@@ -185,9 +186,13 @@ class TRMTrainer:
             print(f"\nEpoch {epoch+1} — loss: {avg['loss']:.4f}  acc: {avg['accuracy']:.3f}"
                   f"  steps: {avg['num_steps']:.1f}  halt: {avg['avg_halt']:.3f}")
 
+            self.epoch_history['loss'].append(avg['loss'])
+            self.epoch_history['accuracy'].append(avg['accuracy'])
+
             if self.val_loader is not None:
                 val_acc = self.evaluate(self.val_loader)
                 print(f"  Val accuracy: {val_acc:.3f}")
+                self.epoch_history['val_accuracy'].append(val_acc)
                 if val_acc > self.best_val_acc:
                     self.best_val_acc = val_acc
                     self.save_checkpoint('best_model.pt')
@@ -404,15 +409,50 @@ if __name__ == "__main__":
         bar = '#' * int(acc * 40)
         print(f"  Step {s:2d}: {acc:.4f} |{bar}")
 
-    # Save per-step accuracy plot
-    from viz import plot_per_step_accuracy
+    # Setup results directory and run name
+    from viz import (plot_per_step_accuracy, plot_z_state_evolution,
+                     plot_scratchpad_heatmap, plot_training_curves,
+                     plot_halt_confidence)
     results_dir = os.path.join(_REPO_ROOT, 'results')
     os.makedirs(results_dir, exist_ok=True)
     run_name = f'{args.task}_{time.strftime("%Y%m%d_%H%M%S")}'
-    plot_path = os.path.join(results_dir, f'{run_name}_per_step.png')
+
+    # 1. Per-step accuracy plot
     plot_per_step_accuracy(step_acc,
                            title=f'{args.task.title()} — Accuracy vs Recursive Step',
-                           save_path=plot_path)
+                           save_path=os.path.join(results_dir, f'{run_name}_per_step.png'))
+
+    # 2. Training curves (loss + accuracy over epochs)
+    plot_training_curves(
+        epoch_losses=trainer.epoch_history['loss'],
+        epoch_accs=trainer.epoch_history['accuracy'],
+        val_accs=trainer.epoch_history['val_accuracy'] or None,
+        title=f'{args.task.title()} — Training Curves',
+        save_path=os.path.join(results_dir, f'{run_name}_training_curves.png'))
+
+    # 3-5. Diagnostic plots from a validation batch
+    print("\nRunning diagnostic forward pass...")
+    diag_batch = next(iter(val_loader))
+    x_diag = diag_batch[0].to(device)
+    diagnostics = trainer.model.diagnostic_forward(x_diag)
+
+    # 3. Z-state evolution (representation collapse diagnostic)
+    plot_z_state_evolution(
+        diagnostics,
+        title=f'{args.task.title()} — Z-State Evolution',
+        save_path=os.path.join(results_dir, f'{run_name}_z_state.png'))
+
+    # 4. Scratchpad (y) heatmap (failure valley heatmap)
+    plot_scratchpad_heatmap(
+        diagnostics,
+        title=f'{args.task.title()} — Scratchpad Activation Heatmap',
+        save_path=os.path.join(results_dir, f'{run_name}_scratchpad.png'))
+
+    # 5. Halt confidence curve
+    plot_halt_confidence(
+        diagnostics,
+        title=f'{args.task.title()} — Halt Confidence',
+        save_path=os.path.join(results_dir, f'{run_name}_halt_confidence.png'))
 
     # Detailed task metrics
     print("\nDetailed evaluation:")
@@ -431,8 +471,17 @@ if __name__ == "__main__":
             'total_steps': trainer.step,
             'best_val_acc': trainer.best_val_acc,
             'training_time_sec': round(train_time, 1),
+            'epoch_losses': [round(v, 6) for v in trainer.epoch_history['loss']],
+            'epoch_accs': [round(v, 6) for v in trainer.epoch_history['accuracy']],
+            'val_accs': [round(v, 6) for v in trainer.epoch_history['val_accuracy']],
         },
         'per_step_accuracy': {str(k): round(v, 6) for k, v in step_acc.items()},
+        'diagnostics': {
+            'z_norms': [round(v, 6) for v in diagnostics['z_norms']],
+            'y_norms': [round(v, 6) for v in diagnostics['y_norms']],
+            'z_cosines': [round(v, 6) for v in diagnostics['z_cosines']],
+            'halt_probs': [round(v, 6) for v in diagnostics['halt_probs']],
+        },
         'evaluation': {k: round(v, 6) for k, v in detailed.items()},
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
     }
@@ -440,4 +489,4 @@ if __name__ == "__main__":
     with open(results_path, 'w') as f:
         json.dump(experiment, f, indent=2)
     print(f"\nExperiment results saved to {results_path}")
-    print(f"Plot saved to {plot_path}")
+    print(f"Plots saved to {results_dir}/{run_name}_*.png")
