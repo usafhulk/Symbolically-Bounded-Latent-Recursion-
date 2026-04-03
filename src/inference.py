@@ -7,12 +7,21 @@ Usage:
     python3 inference.py per_step sudoku
 """
 
-import torch
-import json
-import os
-import numpy as np
-from model import create_trm_model
+from evaluate import evaluate, evaluate_per_step
 from device import get_device
+from model import create_trm_model
+import numpy as np
+import json
+import torch
+import sys
+import os
+
+# Resolve paths: src/ siblings + repo root (for data/)
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_SRC_DIR)
+for _p in (_SRC_DIR, _REPO_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 class TRMInference:
@@ -22,7 +31,8 @@ class TRMInference:
         self.device = get_device()
 
         if config_path is None:
-            config_path = os.path.join(os.path.dirname(checkpoint_path), 'config.json')
+            config_path = os.path.join(
+                os.path.dirname(checkpoint_path), 'config.json')
         with open(config_path) as f:
             self.config = json.load(f)
 
@@ -101,7 +111,8 @@ def demo_maze():
     try:
         inf = TRMInference('checkpoints_maze/best_model.pt')
         y_hat = inf.predict(flat)
-        pred_2d = (y_hat.squeeze(-1) > 0).long()[0].cpu().numpy().reshape(grid.shape)
+        pred_2d = (y_hat.squeeze(-1) >
+                   0).long()[0].cpu().numpy().reshape(grid.shape)
         print("\nPredicted path (green=correct, red=false pos, yellow=missed):")
         print_maze(grid, pred_path=pred_2d, true_path=true_target)
     except FileNotFoundError:
@@ -136,9 +147,51 @@ def demo_per_step(task: str = 'sudoku'):
                 print(f"  Step {i:2d}: cell accuracy = {acc:.4f}")
             else:
                 p = (pred.squeeze(-1) > 0).long()[0]
-                print(f"  Step {i:2d}: predicted path cells = {p.sum().item()}")
+                print(
+                    f"  Step {i:2d}: predicted path cells = {p.sum().item()}")
     except FileNotFoundError:
         print(f"No checkpoint for {task}. Train first.")
+
+
+def demo_eval(task: str = 'sudoku'):
+    """Run full evaluation with per-step accuracy (failure valley diagnostic)."""
+    ckpt = f'checkpoints_{task}/best_model.pt'
+    try:
+        inf = TRMInference(ckpt)
+    except FileNotFoundError:
+        print(f"No checkpoint for {task}. Train first.")
+        return
+
+    from data import get_dataset
+    from torch.utils.data import DataLoader
+    from viz import plot_per_step_accuracy
+
+    ds_kwargs = {}
+    if task == 'sudoku':
+        ds_kwargs = {'min_givens': 17, 'max_givens': 35}
+    elif task == 'maze':
+        ds_kwargs = {'grid_size': inf.config.get('grid_size', 9)}
+
+    ds = get_dataset(task, 'val', seed=42, num_samples=5000, **ds_kwargs)
+    loader = DataLoader(ds, batch_size=64, shuffle=False, num_workers=0)
+
+    # Per-step accuracy — the failure valley curve
+    print("\nPer-step accuracy (failure valley diagnostic):")
+    step_acc = evaluate_per_step(inf.model, loader, inf.device)
+    for s, acc in step_acc.items():
+        bar = '#' * int(acc * 40)
+        print(f"  Step {s:2d}: {acc:.4f} |{bar}")
+
+    plot_per_step_accuracy(step_acc,
+                           title=f'{task.title()} — Accuracy vs Recursive Step',
+                           save_path=f'checkpoints_{task}/per_step_accuracy.png')
+
+    # Detailed metrics
+    print("\nDetailed evaluation:")
+    results = evaluate(inf.model, loader, task, inf.device,
+                       grid_size=inf.config.get('grid_size', 9))
+    for k, v in results.items():
+        print(f"  {k}: {v:.4f}")
 
 
 if __name__ == "__main__":
@@ -149,10 +202,13 @@ if __name__ == "__main__":
         mode = sys.argv[1]
         if mode == 'per_step':
             demo_per_step(sys.argv[2] if len(sys.argv) > 2 else 'sudoku')
+        elif mode == 'eval':
+            demo_eval(sys.argv[2] if len(sys.argv) > 2 else 'sudoku')
         elif mode in demos:
             demos[mode]()
         else:
-            print(f"Unknown mode '{mode}'. Options: sudoku, maze, per_step [task]")
+            print(
+                f"Unknown mode '{mode}'. Options: sudoku, maze, per_step [task], eval [task]")
     else:
-        print("Usage: python3 inference.py [sudoku|maze|per_step [task]]")
+        print("Usage: python3 inference.py [sudoku|maze|per_step|eval] [task]")
         demo_sudoku()

@@ -7,31 +7,43 @@ Usage:
     python3 train.py --task maze --grid_size 11
 """
 
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.optim import AdamW
+from evaluate import evaluate, evaluate_per_step
+from device import get_device, print_device_info
+from model import create_trm_model
 from tqdm import tqdm
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+import torch.nn as nn
+import torch
+import sys
 import os
 import json
 import argparse
+import time
 
-from model import create_trm_model
-from device import get_device, print_device_info
+# Resolve paths: src/ siblings + repo root (for data/)
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_SRC_DIR)
+for _p in (_SRC_DIR, _REPO_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 class EMA:
     """Exponential Moving Average of model parameters"""
+
     def __init__(self, model, decay: float = 0.999):
         self.model = model
         self.decay = decay
-        self.shadow = {n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.shadow = {n: p.data.clone()
+                       for n, p in model.named_parameters() if p.requires_grad}
         self.backup = {}
 
     def update(self):
         for n, p in self.model.named_parameters():
             if p.requires_grad:
-                self.shadow[n] = self.decay * self.shadow[n] + (1 - self.decay) * p.data
+                self.shadow[n] = self.decay * \
+                    self.shadow[n] + (1 - self.decay) * p.data
 
     def apply_shadow(self):
         for n, p in self.model.named_parameters():
@@ -65,13 +77,15 @@ class TRMTrainer:
         task: str = 'sudoku',
     ):
         if not torch.backends.mps.is_available() and device == 'mps':
-            raise RuntimeError("MPS not available. See device.py for requirements.")
+            raise RuntimeError(
+                "MPS not available. See device.py for requirements.")
 
         self.device = device
         self.task = task
         print(f"\nMoving model to {device.upper()}...")
         self.model = model.to(device)
-        print(f"Model on {device.upper()} — {sum(p.numel() for p in model.parameters()):,} params\n")
+        print(
+            f"Model on {device.upper()} — {sum(p.numel() for p in model.parameters()):,} params\n")
 
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -150,8 +164,10 @@ class TRMTrainer:
         print(f"Task: {self.task}  |  Device: {self.device}")
 
         for epoch in range(num_epochs):
-            metrics = {'loss': [], 'accuracy': [], 'num_steps': [], 'avg_halt': []}
-            pbar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{num_epochs}')
+            metrics = {'loss': [], 'accuracy': [],
+                       'num_steps': [], 'avg_halt': []}
+            pbar = tqdm(self.train_loader,
+                        desc=f'Epoch {epoch+1}/{num_epochs}')
 
             for batch in pbar:
                 m = self.train_step(batch)
@@ -202,7 +218,8 @@ class TRMTrainer:
         self.best_val_acc = ckpt.get('best_val_acc', 0.0)
         if self.use_ema and 'ema_shadow' in ckpt:
             self.ema.shadow = ckpt['ema_shadow']
-        print(f"Loaded {path} — step {self.step}, best val acc {self.best_val_acc:.3f}")
+        print(
+            f"Loaded {path} — step {self.step}, best val acc {self.best_val_acc:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -311,23 +328,27 @@ if __name__ == "__main__":
     train_ds = get_dataset(args.task, 'train', seed=args.seed,
                            num_samples=cfg['num_train'], **{
                                k: cfg[k] for k in
-                               (['min_givens', 'max_givens'] if args.task == 'sudoku' else ['grid_size'])
+                               (['min_givens', 'max_givens']
+                                if args.task == 'sudoku' else ['grid_size'])
                                if k in cfg
                            })
     val_ds = get_dataset(args.task, 'val', seed=args.seed,
                          num_samples=cfg['num_val'], **{
                              k: cfg[k] for k in
-                             (['min_givens', 'max_givens'] if args.task == 'sudoku' else ['grid_size'])
+                             (['min_givens', 'max_givens']
+                              if args.task == 'sudoku' else ['grid_size'])
                              if k in cfg
                          })
     print(f"  train: {len(train_ds)}   val: {len(val_ds)}")
 
-    train_loader = DataLoader(train_ds, batch_size=cfg['batch_size'], shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=cfg['batch_size'], shuffle=False, num_workers=0)
+    train_loader = DataLoader(
+        train_ds, batch_size=cfg['batch_size'], shuffle=True, num_workers=0)
+    val_loader = DataLoader(
+        val_ds, batch_size=cfg['batch_size'], shuffle=False, num_workers=0)
 
     # ---- Model ----
     model_kwargs = {k: cfg[k] for k in ('dim', 'n_layers', 'n_heads', 'n_recursions',
-                                         'n_cycles', 'n_supervision')}
+                                        'n_cycles', 'n_supervision')}
     if args.task == 'maze':
         model_kwargs['grid_size'] = cfg['grid_size']
     model = create_trm_model(task=args.task, **model_kwargs)
@@ -345,4 +366,50 @@ if __name__ == "__main__":
         save_dir=save_dir,
         task=args.task,
     )
+    t_start = time.time()
     trainer.train(num_epochs=cfg['num_epochs'])
+    train_time = time.time() - t_start
+
+    # ---- Post-training evaluation (Phase 1 baseline evidence) ----
+    print("\n" + "=" * 60)
+    print("POST-TRAINING EVALUATION")
+    print("=" * 60)
+
+    trainer.save_checkpoint('final_model.pt')
+
+    if trainer.use_ema:
+        trainer.ema.apply_shadow()
+
+    # Per-step accuracy — this IS the failure valley curve
+    print("\nPer-step accuracy (failure valley diagnostic):")
+    step_acc = evaluate_per_step(trainer.model, val_loader, device)
+    for s, acc in step_acc.items():
+        bar = '#' * int(acc * 40)
+        print(f"  Step {s:2d}: {acc:.4f} |{bar}")
+
+    # Detailed task metrics
+    print("\nDetailed evaluation:")
+    detailed = evaluate(trainer.model, val_loader, args.task, device,
+                        grid_size=cfg.get('grid_size', 9))
+    for k, v in detailed.items():
+        print(f"  {k}: {v:.4f}")
+
+    if trainer.use_ema:
+        trainer.ema.restore()
+
+    # ---- Save experiment record ----
+    experiment = {
+        'config': cfg,
+        'training': {
+            'total_steps': trainer.step,
+            'best_val_acc': trainer.best_val_acc,
+            'training_time_sec': round(train_time, 1),
+        },
+        'per_step_accuracy': {str(k): round(v, 6) for k, v in step_acc.items()},
+        'evaluation': {k: round(v, 6) for k, v in detailed.items()},
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+    }
+    results_path = os.path.join(save_dir, 'experiment_results.json')
+    with open(results_path, 'w') as f:
+        json.dump(experiment, f, indent=2)
+    print(f"\nExperiment results saved to {results_path}")
