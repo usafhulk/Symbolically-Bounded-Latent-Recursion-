@@ -258,8 +258,8 @@ TASK_DEFAULTS = {
         'num_epochs': 100,
         'max_steps': 80000,
         'warmup_steps': 1000,
-        'num_train': 50000,
-        'num_val': 5000,
+        'num_train': 10000,
+        #         'num_val': 5000,
         'grid_size': 9,
     },
 }

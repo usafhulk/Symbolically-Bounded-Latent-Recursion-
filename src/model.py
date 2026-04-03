@@ -20,6 +20,7 @@ from typing import Optional, List
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization"""
+
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -32,13 +33,15 @@ class RMSNorm(nn.Module):
 
 class RotaryEmbedding(nn.Module):
     """Rotary Position Embedding"""
+
     def __init__(self, dim: int, max_seq_len: int = 2048):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
 
     def forward(self, seq_len: int) -> tuple:
-        t = torch.arange(seq_len, device=self.inv_freq.device).type_as(self.inv_freq)
+        t = torch.arange(seq_len, device=self.inv_freq.device).type_as(
+            self.inv_freq)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         return emb.cos(), emb.sin()
@@ -47,13 +50,14 @@ class RotaryEmbedding(nn.Module):
 def apply_rotary_pos_emb(q, k, cos, sin):
     """Apply rotary embeddings to queries and keys"""
     def rotate_half(x):
-        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
         return torch.cat((-x2, x1), dim=-1)
     return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 
 class SwiGLU(nn.Module):
     """SwiGLU activation function"""
+
     def __init__(self, dim: int, hidden_dim: int):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
@@ -66,6 +70,7 @@ class SwiGLU(nn.Module):
 
 class MLPMixer(nn.Module):
     """MLP-Mixer for sequence mixing (fixed context size)"""
+
     def __init__(self, seq_len: int, dim: int):
         super().__init__()
         self.norm = RMSNorm(dim)
@@ -80,6 +85,7 @@ class MLPMixer(nn.Module):
 
 class SelfAttention(nn.Module):
     """Multi-head self-attention with rotary embeddings (bidirectional)"""
+
     def __init__(self, dim: int, n_heads: int = 8):
         super().__init__()
         self.n_heads = n_heads
@@ -91,17 +97,20 @@ class SelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, D = x.shape
-        qkv = self.qkv(x).reshape(B, L, 3, self.n_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        qkv = self.qkv(x).reshape(B, L, 3, self.n_heads,
+                                  self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         cos, sin = self.rotary(L)
         cos, sin = cos[None, None], sin[None, None]
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
-        attn = F.softmax((q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim), dim=-1)
+        attn = F.softmax((q @ k.transpose(-2, -1)) /
+                         math.sqrt(self.head_dim), dim=-1)
         return self.proj((attn @ v).transpose(1, 2).reshape(B, L, D))
 
 
 class TransformerLayer(nn.Module):
     """Single transformer layer"""
+
     def __init__(self, dim: int, n_heads: int = 8, mlp_ratio: int = 4,
                  use_attention: bool = True, seq_len: Optional[int] = None):
         super().__init__()
@@ -168,7 +177,8 @@ class SudokuHead(TaskHead):
 
     def encode(self, x_input: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x_input)
-        x = x + self.row_embed(self._row_idx)[None] + self.col_embed(self._col_idx)[None]
+        x = x + self.row_embed(self._row_idx)[None] + \
+            self.col_embed(self._col_idx)[None]
         return x
 
     def decode(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -211,12 +221,14 @@ class MazeHead(TaskHead):
         self.col_embed = nn.Embedding(self.grid_size, dim)
         self.output = nn.Linear(dim, 1, bias=False)
         gs = self.grid_size
-        self.register_buffer("_row_idx", torch.arange(gs).repeat_interleave(gs))
+        self.register_buffer(
+            "_row_idx", torch.arange(gs).repeat_interleave(gs))
         self.register_buffer("_col_idx", torch.arange(gs).repeat(gs))
 
     def encode(self, x_input: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x_input)
-        x = x + self.row_embed(self._row_idx)[None] + self.col_embed(self._col_idx)[None]
+        x = x + self.row_embed(self._row_idx)[None] + \
+            self.col_embed(self._col_idx)[None]
         return x
 
     def decode(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -301,6 +313,7 @@ class TinyRecursiveModel(nn.Module):
 
     def latent_recursion(self, x, y, z):
         """n latent recursions on z, then one y update."""
+
         for _ in range(self.n_recursions):
             z = self.forward_network(x, y, z)
         y = self.forward_network(y, z)
@@ -350,23 +363,30 @@ class TinyRecursiveModel(nn.Module):
             halts: List[torch.Tensor] = []
 
             for _ in range(self.n_supervision):
-                (y, z), y_hat, q_hat = self.deep_recursion(x, y, z, with_gradients=True)
+                (y, z), y_hat, q_hat = self.deep_recursion(
+                    x, y, z, with_gradients=True)
                 y, z = y.detach(), z.detach()
                 predictions.append(y_hat)
                 halts.append(q_hat)
 
                 if y_true is not None:
-                    pred_loss = self.task_head.compute_loss(y_hat, y_true, x_input)
-                    is_correct = self.task_head.check_correct(y_hat, y_true, x_input)
-                    halt_loss = F.binary_cross_entropy(q_hat.squeeze(-1), is_correct)
+                    pred_loss = self.task_head.compute_loss(
+                        y_hat, y_true, x_input)
+                    is_correct = self.task_head.check_correct(
+                        y_hat, y_true, x_input)
+                    halt_loss = F.binary_cross_entropy(
+                        q_hat.squeeze(-1), is_correct)
                     losses.append(pred_loss + 0.5 * halt_loss)
 
             return losses, predictions, halts
         else:
             all_preds: List[torch.Tensor] = []
             for _ in range(self.n_supervision):
-                (y, z), y_hat, q_hat = self.deep_recursion(x, y, z, with_gradients=False)
-                y, z = y.detach(), z.detach()
+                (y, z), y_hat, q_hat = self.deep_recursion(
+                    x, y, z, with_gradients=False)
+
+
+xy                 y, z = y.detach(), z.detach()
                 all_preds.append(y_hat)
 
             return (y_hat, all_preds) if return_all_steps else y_hat

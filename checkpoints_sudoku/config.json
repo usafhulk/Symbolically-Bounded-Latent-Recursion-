@@ -1,0 +1,21 @@
+{
+  "dim": 128,
+  "n_layers": 2,
+  "n_heads": 8,
+  "n_recursions": 8,
+  "n_cycles": 3,
+  "n_supervision": 14,
+  "batch_size": 64,
+  "lr": 0.0003,
+  "weight_decay": 0.1,
+  "num_epochs": 10,
+  "max_steps": 100000,
+  "warmup_steps": 1000,
+  "num_train": 5000,
+  "num_val": 1000,
+  "min_givens": 17,
+  "max_givens": 35,
+  "task": "sudoku",
+  "device": "mps",
+  "save_dir": "checkpoints_sudoku"
+}
