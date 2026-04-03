@@ -129,15 +129,18 @@ class TRMTrainer:
 
         if self.use_ema:
             self.ema.update()
+
+        # Performance optimization: Only check accuracy every 10 steps
+        acc = 0.0
+        if self.step % 10 == 0:
+            with torch.no_grad():
+                acc = self.model.task_head.check_correct(
+                    predictions[-1], y_true, x_input).mean().item()
+
         self.step += 1
-
-        with torch.no_grad():
-            acc = self.model.task_head.check_correct(
-                predictions[-1], y_true, x_input).mean()
-
         return {
             'loss': loss.item(),
-            'accuracy': acc.item(),
+            'accuracy': acc,
             'num_steps': len(predictions),
             'avg_halt': torch.stack(halts).mean().item(),
         }
@@ -240,7 +243,7 @@ TASK_DEFAULTS = {
         'num_epochs': 100,
         'max_steps': 100000,
         'warmup_steps': 1000,
-        'num_train': 50000,
+        'num_train': 10000,  # lowering for the purpose of initial build phase
         'num_val': 5000,
         'min_givens': 17,
         'max_givens': 35,
@@ -252,14 +255,14 @@ TASK_DEFAULTS = {
         'n_recursions': 6,
         'n_cycles': 2,
         'n_supervision': 10,
-        'batch_size': 64,
+        'batch_size': 128,  # saturating GPU Cores
         'lr': 3e-4,
         'weight_decay': 0.1,
         'num_epochs': 100,
         'max_steps': 80000,
         'warmup_steps': 1000,
-        'num_train': 10000,
-        #         'num_val': 5000,
+        'num_train': 10000,  # lowering for the purpose of initial build phase
+        'num_val': 5000,
         'grid_size': 9,
     },
 }
@@ -341,10 +344,24 @@ if __name__ == "__main__":
                          })
     print(f"  train: {len(train_ds)}   val: {len(val_ds)}")
 
+    # ---- Optimized Data Loaders for M2 Max ----
+    # num_workers=4 uses the P-Cores to prep data while GPU trains.
+    # pin_memory=True speeds up the transfer to Unified Memory/MPS.
     train_loader = DataLoader(
-        train_ds, batch_size=cfg['batch_size'], shuffle=True, num_workers=0)
+        train_ds,
+        batch_size=cfg['batch_size'],
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
     val_loader = DataLoader(
-        val_ds, batch_size=cfg['batch_size'], shuffle=False, num_workers=0)
+        val_ds,
+        batch_size=cfg['batch_size'],
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
 
     # ---- Model ----
     model_kwargs = {k: cfg[k] for k in ('dim', 'n_layers', 'n_heads', 'n_recursions',
