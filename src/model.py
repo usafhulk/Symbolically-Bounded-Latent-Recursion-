@@ -27,24 +27,30 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
-        return x / norm * self.weight
+        return x * torch.rsqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps) * self.weight
 
 
 class RotaryEmbedding(nn.Module):
-    """Rotary Position Embedding"""
+    """Rotary Position Embedding with cached sin/cos tables"""
 
     def __init__(self, dim: int, max_seq_len: int = 2048):
         super().__init__()
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
+        self._cache_len = 0
+        self._cos_cache = None
+        self._sin_cache = None
 
     def forward(self, seq_len: int) -> tuple:
-        t = torch.arange(seq_len, device=self.inv_freq.device).type_as(
-            self.inv_freq)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        return emb.cos(), emb.sin()
+        if seq_len != self._cache_len:
+            t = torch.arange(seq_len, device=self.inv_freq.device).type_as(
+                self.inv_freq)
+            freqs = t.unsqueeze(1) * self.inv_freq.unsqueeze(0)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            self._cos_cache = emb.cos()
+            self._sin_cache = emb.sin()
+            self._cache_len = seq_len
+        return self._cos_cache, self._sin_cache
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
@@ -103,9 +109,8 @@ class SelfAttention(nn.Module):
         cos, sin = self.rotary(L)
         cos, sin = cos[None, None], sin[None, None]
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
-        attn = F.softmax((q @ k.transpose(-2, -1)) /
-                         math.sqrt(self.head_dim), dim=-1)
-        return self.proj((attn @ v).transpose(1, 2).contiguous().reshape(B, L, D))
+        out = F.scaled_dot_product_attention(q, k, v)
+        return self.proj(out.transpose(1, 2).contiguous().reshape(B, L, D))
 
 
 class TransformerLayer(nn.Module):
@@ -387,6 +392,63 @@ class TinyRecursiveModel(nn.Module):
                 all_preds.append(y_hat)
 
             return (y_hat, all_preds) if return_all_steps else y_hat
+
+    @torch.no_grad()
+    def diagnostic_forward(self, x_input: torch.Tensor):
+        """Forward pass that captures latent state diagnostics at every step.
+
+        Returns dict with:
+            z_norms:    [n_supervision] mean L2 norm of z per step
+            y_norms:    [n_supervision] mean L2 norm of y per step
+            z_cosines:  [n_supervision-1] cosine similarity between consecutive z states
+            y_heatmaps: [n_supervision, seq_len] mean absolute activation of y
+            halt_probs: [n_supervision] mean halt probability per step
+            predictions: list of per-step logits
+        """
+        self.eval()
+        B = x_input.shape[0]
+        x = self.task_head.encode(x_input)
+        seq_len = x.shape[1]
+
+        y = self.y_init.expand(B, seq_len, -1)
+        z = self.z_init.expand(B, seq_len, -1)
+
+        z_norms, y_norms, z_cosines = [], [], []
+        y_heatmaps, halt_probs, predictions = [], [], []
+        prev_z = None
+
+        for _ in range(self.n_supervision):
+            (y, z), y_hat, q_hat = self.deep_recursion(
+                x, y, z, with_gradients=False)
+            y, z = y.detach(), z.detach()
+
+            # z-state evolution: L2 norm averaged over batch & seq
+            z_norms.append(z.norm(dim=-1).mean().item())
+            y_norms.append(y.norm(dim=-1).mean().item())
+
+            # Cosine similarity between consecutive z states
+            if prev_z is not None:
+                cos = F.cosine_similarity(
+                    prev_z.reshape(B, -1), z.reshape(B, -1), dim=-1
+                ).mean().item()
+                z_cosines.append(cos)
+            prev_z = z.clone()
+
+            # Scratchpad heatmap: mean |y| per sequence position
+            y_heatmaps.append(y.abs().mean(dim=(0, 2)).cpu().numpy())
+
+            # Halt confidence
+            halt_probs.append(q_hat.mean().item())
+            predictions.append(y_hat)
+
+        return {
+            'z_norms': z_norms,
+            'y_norms': y_norms,
+            'z_cosines': z_cosines,
+            'y_heatmaps': y_heatmaps,
+            'halt_probs': halt_probs,
+            'predictions': predictions,
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -49,3 +49,13 @@ python train.py --task sudoku
 # Train on Maze
 python train.py --task maze --grid_size 11
 ```
+
+
+### after baseline run
+#### Experiment A: Deep Logic, Short Scratchpad
+- Keep the supervision steps low, but give the model maximum "thinking" depth per step.
+- n_recursions=8, n_supervision=7 ($168 \text{ passes}$)
+
+#### Experiment B: Shallow Logic, Long Scratchpad
+- Keep the thinking shallow, but give the model plenty of intermediate steps to fill out the easier cells first.
+- n_recursions=4, n_supervision=14 ($168 \text{ passes}$)

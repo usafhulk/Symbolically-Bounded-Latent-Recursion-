@@ -1,0 +1,43 @@
+{
+  "config": {
+    "dim": 128,
+    "n_layers": 2,
+    "n_heads": 8,
+    "n_recursions": 4,
+    "n_cycles": 3,
+    "n_supervision": 7,
+    "batch_size": 64,
+    "lr": 0.0003,
+    "weight_decay": 0.1,
+    "num_epochs": 10,
+    "max_steps": 100000,
+    "warmup_steps": 1000,
+    "num_train": 10000,
+    "num_val": 5000,
+    "min_givens": 17,
+    "max_givens": 35,
+    "task": "sudoku",
+    "device": "mps",
+    "save_dir": "checkpoints_sudoku"
+  },
+  "training": {
+    "total_steps": 1570,
+    "best_val_acc": 0.0,
+    "training_time_sec": 1318.4
+  },
+  "per_step_accuracy": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 0.0,
+    "5": 0.0,
+    "6": 0.0
+  },
+  "evaluation": {
+    "cell_accuracy": 0.204905,
+    "puzzle_accuracy": 0.0,
+    "constraint_satisfaction_rate": 0.0
+  },
+  "timestamp": "2026-04-03 11:11:10"
+}

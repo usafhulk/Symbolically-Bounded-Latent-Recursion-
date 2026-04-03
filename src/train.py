@@ -351,7 +351,7 @@ if __name__ == "__main__":
         train_ds,
         batch_size=cfg['batch_size'],
         shuffle=True,
-        num_workers=4,
+        num_workers=2,
         pin_memory=True,
         persistent_workers=True
     )
@@ -359,7 +359,7 @@ if __name__ == "__main__":
         val_ds,
         batch_size=cfg['batch_size'],
         shuffle=False,
-        num_workers=4,
+        num_workers=2,
         pin_memory=True
     )
 
@@ -404,6 +404,16 @@ if __name__ == "__main__":
         bar = '#' * int(acc * 40)
         print(f"  Step {s:2d}: {acc:.4f} |{bar}")
 
+    # Save per-step accuracy plot
+    from viz import plot_per_step_accuracy
+    results_dir = os.path.join(_REPO_ROOT, 'results')
+    os.makedirs(results_dir, exist_ok=True)
+    run_name = f'{args.task}_{time.strftime("%Y%m%d_%H%M%S")}'
+    plot_path = os.path.join(results_dir, f'{run_name}_per_step.png')
+    plot_per_step_accuracy(step_acc,
+                           title=f'{args.task.title()} — Accuracy vs Recursive Step',
+                           save_path=plot_path)
+
     # Detailed task metrics
     print("\nDetailed evaluation:")
     detailed = evaluate(trainer.model, val_loader, args.task, device,
@@ -414,7 +424,7 @@ if __name__ == "__main__":
     if trainer.use_ema:
         trainer.ema.restore()
 
-    # ---- Save experiment record ----
+    # ---- Save experiment record to results/ (git-tracked) ----
     experiment = {
         'config': cfg,
         'training': {
@@ -426,7 +436,8 @@ if __name__ == "__main__":
         'evaluation': {k: round(v, 6) for k, v in detailed.items()},
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
     }
-    results_path = os.path.join(save_dir, 'experiment_results.json')
+    results_path = os.path.join(results_dir, f'{run_name}_results.json')
     with open(results_path, 'w') as f:
         json.dump(experiment, f, indent=2)
     print(f"\nExperiment results saved to {results_path}")
+    print(f"Plot saved to {plot_path}")
