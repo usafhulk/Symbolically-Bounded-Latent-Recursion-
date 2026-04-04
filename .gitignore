@@ -209,3 +209,4 @@ __marimo__/
 # TRM — heavy model checkpoints (keep results/, ignore .pt files)
 checkpoints_*/
 *.pt
+RESULTS.md
