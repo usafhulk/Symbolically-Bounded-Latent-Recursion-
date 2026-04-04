@@ -1,5 +1,6 @@
 torch
 numpy
 tqdm
+ipywidgets
 matplotlib
 z3-solver
