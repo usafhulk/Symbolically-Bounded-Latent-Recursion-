@@ -163,16 +163,16 @@ class TRMTrainer:
             self.ema.restore()
         return total_correct / max(total, 1)
 
-    def train(self, num_epochs: int):
+    def train(self, num_epochs: int, start_epoch: int = 0):
         print(f"Task: {self.task}  |  Device: {self.device}")
-        self.epoch_history = {'loss': [], 'accuracy': [], 'val_accuracy': []}
+        if not hasattr(self, 'epoch_history'):
+            self.epoch_history = {'loss': [], 'accuracy': [], 'val_accuracy': []}
 
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             metrics = {'loss': [], 'accuracy': [],
                        'num_steps': [], 'avg_halt': []}
             pbar = tqdm(self.train_loader,
                         desc=f'Epoch {epoch+1}/{num_epochs}')
-
             for batch in pbar:
                 m = self.train_step(batch)
                 for k, v in m.items():
@@ -199,35 +199,41 @@ class TRMTrainer:
                     print(f"  New best: {val_acc:.3f}")
 
             if (epoch + 1) % 10 == 0:
-                self.save_checkpoint(f'checkpoint_epoch_{epoch+1}.pt')
+                self.save_checkpoint(f'checkpoint_epoch_{epoch+1}.pt', epoch=epoch + 1)
 
             if self.step >= self.max_steps:
                 print(f"Reached max steps ({self.max_steps})")
                 break
 
-    def save_checkpoint(self, filename: str):
+    def save_checkpoint(self, filename: str, epoch: int = 0):
         path = os.path.join(self.save_dir, filename)
         ckpt = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'step': self.step,
+            'epoch': epoch,
             'best_val_acc': self.best_val_acc,
+            'epoch_history': getattr(self, 'epoch_history', {}),
         }
         if self.use_ema:
             ckpt['ema_shadow'] = self.ema.shadow
         torch.save(ckpt, path)
         print(f"  Saved: {path}")
 
-    def load_checkpoint(self, path: str):
+    def load_checkpoint(self, path: str) -> int:
+        """Load checkpoint and return the next epoch to train from."""
         ckpt = torch.load(path, map_location=self.device)
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         self.step = ckpt['step']
         self.best_val_acc = ckpt.get('best_val_acc', 0.0)
+        if ckpt.get('epoch_history'):
+            self.epoch_history = ckpt['epoch_history']
         if self.use_ema and 'ema_shadow' in ckpt:
             self.ema.shadow = ckpt['ema_shadow']
-        print(
-            f"Loaded {path} — step {self.step}, best val acc {self.best_val_acc:.3f}")
+        start_epoch = ckpt.get('epoch', 0)
+        print(f"Resumed {path} — epoch {start_epoch}, step {self.step}, best val {self.best_val_acc:.3f}")
+        return start_epoch
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +308,8 @@ def parse_args():
     p.add_argument('--max_givens', type=int)
 
     p.add_argument('--save_dir', type=str)
+    p.add_argument('--resume', type=str, default=None,
+                   help='Path to checkpoint to resume from (e.g. checkpoints_sudoku/checkpoint_epoch_60.pt)')
     return p.parse_args()
 
 
@@ -389,7 +397,10 @@ if __name__ == "__main__":
         task=args.task,
     )
     t_start = time.time()
-    trainer.train(num_epochs=cfg['num_epochs'])
+    start_epoch = 0
+    if args.resume:
+        start_epoch = trainer.load_checkpoint(args.resume)
+    trainer.train(num_epochs=cfg['num_epochs'], start_epoch=start_epoch)
     train_time = time.time() - t_start
 
     # ---- Post-training evaluation (Phase 1 baseline evidence) ----
