@@ -1604,6 +1604,116 @@ Flat at ~59.3% — consistent with all prior BPTT runs. No macro-step refinement
 3. **Run 022 alternative (if Run 021 gap remains ≥7 pts): Targeted dropout sweep.** If pure data scaling does not close the gap, test `dropout=0.05` with `num_train=15,000`. The goal is to find the lowest dropout rate that preserves CSR ≥13% while still tightening the generalization gap below 5 points — a narrower noise floor that doesn't destroy constraint coordination.
 
 **Plots:**
-- *(pending — add paths when plots are generated)*
+- ![Per-step accuracy](results/exp-sudoku-r020/sudoku_20260526_010415_per_step.png)
+- ![Training curves](results/exp-sudoku-r020/sudoku_20260526_010415_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r020/sudoku_20260526_010415_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r020/sudoku_20260526_010415_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r020/sudoku_20260526_010415_halt_confidence.png)
+
+---
+
+### Run 021 — `exp/sudoku/r021` — Pure Data Scale-Up (num_train=15,000, dropout=0)
+
+**Hypothesis:** Run 020 contaminated the data scaling signal by retaining dropout=0.1, compounding the CSR damage (8.1%). This run isolates the single variable: `num_train=15,000` with the clean Run 018 architecture (`dropout=0`). The prediction is that data diversity alone closes the generalization gap without the coordination-disruption penalty — recovering CSR ≥15% (Run 018 baseline) while narrowing the train/val split to <5 points.
+
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 100 |
+| num_train / num_val | **15,000** / 1,000 |
+| givens range | 17–35 |
+| use_z3_pruning | False |
+| **dropout** | **0** (removed — clean Run 018 architecture) |
+| total steps | 31,300 |
+| training time | **~6.65 hours (23,934.8 s)** |
+| device | cuda (L4) |
+| timestamp | 2026-05-26 19:23:56 |
+
+**Results:**
+
+| Metric | Run 021 (no dropout, 15k) | Run 020 (dropout, 15k) | Run 018 (no dropout, 5k) | Delta vs 018 |
+|---|---|---|---|---|
+| Cell accuracy | **57.60%** | 57.76% | 56.1% | +1.5 pts |
+| Puzzle accuracy | **2.8%** | 3.6% | 4.8% | **−2.0 pts** |
+| Constraint satisfaction | **6.1%** | 8.1% | 15.2% | **−9.1 pts** |
+| Best val accuracy | **59.75%** | 59.66% | 59.1% | +0.65 pts |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | Val Acc | Train Acc | Gap |
+|---|---|---|---|
+| 10 | 58.47% | ~54.5% | ~4.0 pts |
+| 20 | 59.17% | ~58.9% | ~0.3 pts |
+| 30 | 59.47% | ~58.2% | −1.3 pts |
+| 40 | 59.53% | ~59.5% | ~0.0 pts |
+| 50 | 59.62% | ~59.8% | ~0.2 pts |
+| **60** | **59.75%** | **60.4%** | **0.65 pts** |
+| 70 | 59.61% | 60.6% | 1.0 pts |
+| 80 | 59.46% | 61.6% | 2.1 pts |
+| 90 | 59.15% | 62.2% | 3.1 pts |
+| 100 | 59.17% | **62.9%** | **3.7 pts** |
+
+Post-peak val decay: 59.75% → 59.17% = **0.58 pts** — the flattest val curve across all runs. Final train/val gap: **3.7 points** — down from ~9 points in Run 018.
+
+**Diagnostics — collapse-free, halt gate stable:**
+
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 17.374 | 46.58 | — | 0.6268 |
+| 1 | 17.212 | 98.11 | 0.8856 | 0.6293 |
+| 2 | 17.159 | 151.23 | 0.9863 | 0.6298 |
+| 3 | 17.138 | 205.08 | 0.9969 | 0.6268 |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 58.93% |
+| 1 | 59.09% |
+| 2 | 59.15% |
+| 3 | 59.17% |
+
+Flat at ~59.1% — same profile as all prior BPTT runs.
+
+**Key findings:**
+
+1. **The generalization gap is solved — but it doesn't help where it matters.** The train/val gap collapsed from ~9 points (Run 018) to **3.7 points at epoch 100** and effectively **0.65 points at peak (epoch 60)**. This is the best generalization achieved across all runs. The val curve barely decays (0.58 pts over 40 epochs). By the success criterion for dataset scaling, this is a complete success. But the downstream metrics tell the opposite story.
+
+2. **CSR hit a new low: 6.1%.** Run 018 (5k, no dropout): 15.2%. Run 019 (5k, dropout): 11.9%. Run 020 (15k, dropout): 8.1%. Run 021 (15k, no dropout): **6.1%**. Each intervention that improves generalization has degraded constraint satisfaction. This is not a coincidence — it is a structural result. The more the model generalizes across diverse puzzle examples, the less it exploits the specific constraint patterns it has memorized. CSR is a memorization-sensitive metric: a model that has overfit to 5,000 training puzzles knows which cells are typically constrained together in *those* puzzles. A model that generalizes across 15,000 diverse puzzles learns weaker, more averaged constraint associations.
+
+3. **Puzzle accuracy also regressed (2.8% — new low across BPTT runs).** Same dynamic as CSR. Fully correct puzzles require all 81 cells to be simultaneously right — this is an extremely memorization-friendly metric. With 5k training examples, the model can sometimes reproduce near-exact solutions it has seen. With 15k diverse examples, the representations are smoother and less solution-specific.
+
+4. **The cell accuracy metric is decoupled from the task.** Best val accuracy (59.75%) is a new record. Cell accuracy (57.6%) improved over Run 018's 56.1%. But puzzle accuracy (2.8%) and CSR (6.1%) are the worst since Run 013. This decoupling is a critical finding: **the model is trained and evaluated primarily on cell-level cross-entropy, which does not penalize constraint violations at all.** A model that predicts each cell independently at 57.6% accuracy is optimizing a different objective than a model that must produce globally consistent Sudoku grids. More data makes the model better at the training objective and worse at the actual task.
+
+5. **Z cosine at step 1 (0.886) is the lowest across Runs 014–021.** More training data is making consecutive macro-steps *more* divergent. The model is exploring a wider latent manifold between supervision steps — but with no mechanism to anchor that exploration to constraint-consistent regions, the additional diversity of thought does not translate to better solutions. This is precisely the latent-space problem the Z3 integration is designed to address.
+
+6. **Z norms continue their downward trend with dataset scale (17.37 vs 20.9 in R018).** The z_norm_layer operating scale has shifted across Runs 018→019→020→021: 20.9 → 20.9 → 17.8 → 17.4. Larger datasets pull the normalization to a smaller scale. The mechanism is unclear but consistent.
+
+7. **Training time confirms L4 estimate (6.65h vs 4.8h on A100).** The 1.4× speedup of the A100 over L4 is confirmed. For a null-result run like this, L4 was the correct choice.
+
+8. **The training objective must change.** Runs 018–021 have now comprehensively established that optimizing cell-level cross-entropy with better regularization or more data cannot produce the constraint coherence needed for puzzle/CSR accuracy. The ceiling is not a generalization problem — the generalization is now solved. The ceiling is an **objective misalignment problem**: the model is not being trained to produce valid Sudoku, only to predict correct digits independently. The path forward requires either (a) a constraint-aware training signal (propagation-aware Z3 injecting constraint gradients into the latent loop) or (b) a constraint satisfaction loss term added to the training objective.
+
+**Next steps — reframed:**
+
+1. **Run 022: Propagation-aware Z3 with 15k training data.** Use the 15k generalization-stable baseline established here. Replace clue-only Z3 pruning with model-argmax-guided pruning — using the model's current best predictions as the constraint source, not just the given clues. The signal is much richer (~59% correct predictions vs ~30% clue density). Now that the generalization gap is solved, any improvement in CSR and puzzle accuracy from Z3 can be attributed to the symbolic constraint signal rather than overfitting artifacts.
+
+2. **Add a constraint satisfaction auxiliary loss.** Add a differentiable row/column/box uniqueness penalty to the training loss alongside cross-entropy. Even a soft version (penalize duplicate digit probabilities within each constraint group) would push the model's optimization directly toward valid grid structure rather than independent cell prediction.
+
+3. **Do not attempt further regularization or data scaling.** The generalization problem is solved. Runs 018–021 prove the ceiling is in the objective, not the generalization. Further data (20k, 30k) or regularization (stronger dropout, weight decay) will improve the train/val gap further but will continue to degrade CSR. This axis of investigation is exhausted.
+
+**Plots:**
+- ![Per-step accuracy](results/exp-sudoku-r021/sudoku_20260526_121718_per_step.png)
+- ![Training curves](results/exp-sudoku-r021/sudoku_20260526_121718_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r021/sudoku_20260526_121718_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r021/sudoku_20260526_121718_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r021/sudoku_20260526_121718_halt_confidence.png)
 
 ---
