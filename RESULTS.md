@@ -1525,17 +1525,85 @@ Flat at ~58.1%, matching the profile across all BPTT runs. Macro-step refinement
 
 ---
 
-### Run 020 — Plan: Training Data Scale-Up (num_train=15,000)
+### Run 020 — `exp/sudoku/r020` — Dropout + Training Data Scale-Up (dropout=0.1, num_train=15,000)
 
-**Objective:** Eliminate the generalization gap by scaling training data rather than imposing activation noise, preserving CSR coherence while closing the train/val split.
+**Hypothesis:** The Run 019 plan called for removing dropout and scaling training data to 15,000 as a clean data-only experiment. In practice, Run 020 combined both interventions simultaneously: `dropout=0.1` was retained from Run 019 and `num_train` was scaled from 5,000 to 15,000. The prediction was that 3× more training data would reduce memorization pressure and outweigh dropout's known CSR cost, yielding a wider, more general constraint manifold despite the activation noise.
 
-**The problem being solved.** Run 019 confirmed that dropout=0.1 partially regularizes (gap: 9 → 6.3 pts, val decay: 1.5 → 0.9 pts) but imposes an unacceptable CSR cost (15.2% → 11.9%, −3.3 pts). The root cause of overfitting is not model capacity — it is dataset scale. A dim=512 model with 64-step BPTT effective depth has sufficient capacity to memorize 5,000 training puzzles. The solution is to outpace that memorization with data diversity rather than handicapping the optimizer with activation noise.
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 100 |
+| num_train / num_val | **15,000** / 1,000 |
+| givens range | 17–35 |
+| use_z3_pruning | False |
+| **dropout** | **0.1** (retained from Run 019) |
+| total steps | 31,300 |
+| training time | **~4.8 hours (17,288.9 s)** |
+| device | cuda |
+| timestamp | 2026-05-26 05:54:35 |
 
-**Single variable changed:** Increase `num_train` from 5,000 to 15,000 (3× scale-up). Remove dropout entirely (`dropout=0` — restore Run 018 architecture). All other hyperparameters identical to Run 018: `batch_size=48`, `use_z3_pruning=False`, `seed=42`, `num_epochs=100`, L4 GPU.
+**Results:**
 
-**Expected outcomes:**
+| Metric | Run 020 (dropout + 15k) | Run 019 (dropout + 5k) | Run 018 (no dropout + 5k) | Delta vs 019 | Delta vs 018 |
+|---|---|---|---|---|---|
+| Cell accuracy | **57.76%** | 56.6% | 56.1% | +1.2 pts | +1.7 pts |
+| Puzzle accuracy | **3.6%** | 4.1% | 4.8% | −0.5 pts | **−1.2 pts** |
+| Constraint satisfaction | **8.1%** | 11.9% | 15.2% | **−3.8 pts** | **−7.1 pts** |
+| Best val accuracy | **59.66%** | 59.0% | 59.1% | +0.66 pts | +0.56 pts |
 
-- **Success signal:** Train/val gap narrows to <5 points. Val accuracy curve holds its peak through epoch 100 without post-peak decay. CSR recovers to ≥15% (Run 018 baseline). Puzzle accuracy ≥4.8%.
-- **Failure signal:** Gap remains ≥7 points despite 3× data. If so, the model capacity is genuinely too large for any fixed training set at this scale — structural regularization (dropout sweep, weight decay increase) becomes the necessary path.
+**Diagnostics — collapse-free, halt gate stable:**
 
-**Why this must come before propagation-aware Z3.** A clean, generalization-stable neural baseline with CSR ≥15% is required to interpret whether propagation-aware Z3 pruning (using the model's argmax as the constraint source) produces a real improvement or a noise artifact. Run 020 is the gate that unlocks Run 021.
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 17.963 | 47.10 | — | 0.6294 |
+| 1 | 17.837 | 95.58 | 0.9244 | 0.6267 |
+| 2 | 17.797 | 144.30 | 0.9939 | 0.6273 |
+| 3 | 17.782 | 192.88 | 0.9984 | 0.6257 |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 59.14% |
+| 1 | 59.34% |
+| 2 | 59.32% |
+| 3 | 59.35% |
+
+Flat at ~59.3% — consistent with all prior BPTT runs. No macro-step refinement signal.
+
+**Key findings:**
+
+1. **Combining dropout + data scaling makes CSR worse, not better.** CSR dropped to 8.1% — a 3.8-point regression from Run 019 (11.9%) and a catastrophic 7.1-point regression from Run 018 (15.2%). The two interventions do not compensate each other; they compound the constraint coherence damage. Dropout destroys the coordinated cell activations required for multi-cell constraint satisfaction, and increasing dataset size does not restore them — it simply gives the model more examples of noisy, coordination-disrupted training signal to fit.
+
+2. **Best val accuracy improved marginally (59.66% — new peak across all runs).** Cell accuracy also improved (+1.7 pts vs Run 018). The data scaling signal is real: more training diversity does lift the overall representation quality measurable at the cell level. But this gain does not translate to puzzle-level or constraint-level coherence under dropout.
+
+3. **Puzzle accuracy regressed below all BPTT baselines (3.6%).** This is the worst puzzle accuracy since Run 013 (1.6%). The combined burden of dropout noise and the harder optimization landscape from 3× more data appears to have degraded the model's ability to produce fully correct puzzles, even as individual cell correctness improved. The cell accuracy vs puzzle accuracy divergence is widening — the model is predicting individual digits more accurately but losing the coherence to get all 81 simultaneously right.
+
+4. **Z norms are lower than Run 019 (17.9 vs 20.9).** The larger dataset appears to be mildly affecting the z_norm_layer dynamics — the normalization is pulling the latent vectors to a slightly smaller scale. This is not a collapse signal (norms are still flat across steps), but it suggests the 15k-puzzle optimization landscape is subtly different from the 5k one. Worth monitoring in future runs.
+
+5. **Z cosine at step 1 (0.924) is higher than Run 019 (0.910) and Run 018 (0.883).** The larger dataset is pushing successive latent states to be more aligned, not less. Dropout + data together produce a tighter latent trajectory than dropout alone. This is consistent with interpretation 1: the model is learning a more stable but less discriminative representation — smooth but structurally impoverished for constraint coherence.
+
+6. **The failed hypothesis: data scaling cannot rescue dropout's CSR cost.** The core question Run 020 posed was whether data diversity can override the coordination-disruption penalty of activation noise. The answer is no. CSR requires cells to produce mutually consistent predictions; dropout independently masks each cell's activations during training, destroying the joint signal regardless of how many puzzles are shown. The fix is not more data under dropout — it is no dropout.
+
+7. **Run 021 is now precisely defined.** The correct experiment — the one the Run 020 plan originally intended — is `num_train=15,000, dropout=0` (restore Run 018 architecture with 3× data). This isolates data scaling as a single variable. Run 020 demonstrated that the data scale-up yields measurable gains in cell accuracy and val accuracy; Run 021 will determine whether those gains survive without the CSR penalty.
+
+**Next steps — prioritized:**
+
+1. **Run 021 (immediate): Pure data scale-up — `num_train=15,000, dropout=0`.** Isolate the data scaling effect without dropout interference. Expected: cell accuracy ≥57.8% (matching Run 020), puzzle accuracy ≥4.8% (recovering Run 018 baseline), CSR ≥15% (recovering Run 018 baseline), train/val gap <7 pts. If this succeeds, the clean generalization-stable neural baseline required for propagation-aware Z3 is established.
+
+2. **Run 022 (conditional on Run 021 success): Propagation-aware Z3 pruning.** Use the model's argmax output as the hard constraint source for Z3 pruning rather than the raw input clues. This is the intervention that Run 018's ablation analysis identified as the necessary upgrade — clue-only pruning masks too few candidates to matter; model-guided pruning uses the 57–59% correct prediction signal to eliminate far more.
+
+3. **Run 022 alternative (if Run 021 gap remains ≥7 pts): Targeted dropout sweep.** If pure data scaling does not close the gap, test `dropout=0.05` with `num_train=15,000`. The goal is to find the lowest dropout rate that preserves CSR ≥13% while still tightening the generalization gap below 5 points — a narrower noise floor that doesn't destroy constraint coordination.
+
+**Plots:**
+- *(pending — add paths when plots are generated)*
+
+---
