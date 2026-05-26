@@ -281,6 +281,6 @@
     "puzzle_accuracy": 0.036,
     "constraint_satisfaction_rate": 0.081
   },
-  "notes": "9x9 grid_size = 9, use_z3_pruning = False, min_givens = 17, max_givens = 35, num_epochs = 100\n Adding a dropout layer with 0.1 value so I can stabalize the gradients and prevent overfitting. ",
+  "notes": "9x9 grid_size = 9, use_z3_pruning = False, min_givens = 17, max_givens = 35, num_epochs = 100\n Adding a dropout layer with 0.1 value so I can stabalize the gradients and prevent overfitting. Training number increased to 15000, and validation number increased to 1000. Training time is around 4.8 hours.",
   "timestamp": "2026-05-26 05:54:35"
 }
