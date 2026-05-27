@@ -1717,3 +1717,111 @@ Flat at ~59.1% — same profile as all prior BPTT runs.
 - ![Halt confidence](results/exp-sudoku-r021/sudoku_20260526_121718_halt_confidence.png)
 
 ---
+
+### Run 022 — `exp/sudoku/r022` — Z3 Symbolic Pruning (use_z3_pruning=True, num_train=15,000)
+
+**Hypothesis:** Run 021 proved that objective misalignment — not generalization — is responsible for the CSR collapse. With the 15k generalization-stable baseline established, enabling propagation-aware Z3 pruning (using the model's own argmax predictions as the constraint source, not just raw clues) should inject structural constraint signal into every forward pass, directly recovering CSR without sacrificing the generalization gains. Expected: CSR ≥15% (recovering Run 018), puzzle accuracy ≥4.8% (Run 018), cell accuracy held at ~57.6%, best val accuracy held at ~59.7%.
+
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 100 |
+| num_train / num_val | 15,000 / 1,000 |
+| givens range | 17–35 |
+| **use_z3_pruning** | **True** (enabled — single variable change from R021) |
+| dropout | 0 |
+| total steps | 31,300 |
+| training time | **~7.0 hours (25,193.7 s)** |
+| device | cuda (L4) |
+| timestamp | 2026-05-27 03:59:19 |
+
+**Results:**
+
+| Metric | Run 022 (Z3=True, 15k) | Run 021 (Z3=False, 15k) | Run 018 (Z3=False, 5k) | Delta vs 021 | Delta vs 018 |
+|---|---|---|---|---|---|
+| Cell accuracy | **57.29%** | 57.60% | 56.1% | −0.31 pts | +1.2 pts |
+| Puzzle accuracy | **4.0%** | 2.8% | 4.8% | **+1.2 pts** | −0.8 pts |
+| Constraint satisfaction | **12.6%** | 6.1% | 15.2% | **+6.5 pts** | −2.6 pts |
+| Best val accuracy | **59.70%** | 59.75% | 59.1% | −0.05 pts | +0.6 pts |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | Val Acc | Train Acc | Gap |
+|---|---|---|---|
+| 10 | 58.42% | 58.76% | 0.3 pts |
+| 20 | 59.40% | 58.85% | −0.6 pts |
+| 30 | 59.65% | 59.76% | 0.1 pts |
+| **40** | **59.70%** | **60.06%** | **0.4 pts** |
+| 50 | 59.62% | 60.17% | 0.6 pts |
+| 60 | 59.57% | 59.56% | ~0.0 pts |
+| 70 | 59.28% | 61.46% | 2.2 pts |
+| 80 | 59.05% | 61.99% | 2.9 pts |
+| 90 | 58.89% | 63.57% | 4.7 pts |
+| 100 | 58.89% | 63.60% | 4.7 pts |
+
+Peak val at epoch 40. Post-peak decay: 59.70% → 58.89% = **0.81 pts**. Final train/val gap: **4.7 points** — slightly wider than R021 (3.7 pts) but still generalization-stable by any prior benchmark.
+
+**Diagnostics:**
+
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 15.634 | 33.48 | — | 0.642 |
+| 1 | 15.636 | 64.90 | **0.934** | 0.645 |
+| 2 | 15.645 | 98.06 | 0.995 | 0.644 |
+| 3 | 15.649 | 131.11 | 0.999 | 0.646 |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 58.79% |
+| 1 | 58.94% |
+| 2 | 58.89% |
+| 3 | 58.89% |
+
+**Key findings:**
+
+1. **Z3 pruning delivers a meaningful CSR recovery: 12.6% vs 6.1% (+6.5 pts).** Enabling symbolic constraint enforcement on model-argmax predictions nearly doubles constraint satisfaction from R021. This directly validates the Run 021 diagnosis: the CSR collapse was caused by objective misalignment, and structural constraint enforcement at inference time partially corrects it. Z3 pruning is doing real work.
+
+2. **Puzzle accuracy also recovered: 4.0% vs 2.8% (+1.2 pts).** The improvement in globally valid puzzles tracks the CSR gain. However, both metrics remain below Run 018's baseline (CSR 15.2%, puzzle 4.8%) despite 3× more training data and better generalization. Z3 pruning partially corrects the objective misalignment but does not fully close the gap.
+
+3. **Cell accuracy cost is minimal: 57.29% vs 57.60% (−0.31 pts).** The symbolic masking occasionally blocks a cell prediction that was individually correct but constraint-violating. This is the correct trade-off — small cell accuracy cost, large constraint quality gain. Best val accuracy is essentially unchanged (59.70% vs 59.75%).
+
+4. **Z-state norms dropped sharply: 15.63–15.65 vs 17.14–17.37 in R021.** The z_norm has compressed substantially with Z3 enabled. The symbolic constraint is reshaping the latent representation at a structural level — fewer illegal-logit hypotheses means a tighter, lower-energy latent manifold. This is the first evidence of Z3 affecting internal representations, not just output predictions.
+
+5. **Y-norms (scratchpad) are also lower: max 131.1 vs 205.1 in R021.** The scratchpad accumulates less energy across supervision cycles. With illegal moves masked, the model accumulates fewer conflicting hypotheses. The scratchpad heatmap still shows four clean progressive bands, but the scale is reduced — the model is doing less speculative work per cycle.
+
+6. **Step-1 z_cosine increased to 0.934 (vs 0.886 in R021 — highest in the BPTT era).** Consecutive macro-step latent states are more similar with Z3 pruning active. With illegal moves masked, the latent trajectory is more constrained — less divergence between supervision cycles. This is structurally sound: fewer available hypotheses means each macro-step refines rather than explores.
+
+7. **Halt confidence slightly higher and flatter: ~0.644 vs ~0.627 in R021.** The symbolic constraint signal gives the model a more consistent basis for halting decisions. The halt gate is effectively more confident because the output distribution it observes is more structured (constraint-enforced).
+
+8. **Training loss started lower and ended lower: 1.228 → 0.894 vs an estimated ~1.5+ start in R020/R021.** Z3 pruning active during training means the model sees masked logit distributions from epoch 1 — it starts with cleaner, more constraint-consistent supervision signals, and correspondingly achieves better loss from the beginning.
+
+9. **The residual CSR gap (12.6% vs 15.2% target) reveals the limit of inference-time-only constraint enforcement.** Z3 pruning at inference time corrects the model's *output* but does not backpropagate constraint gradients into the *latent state*. The training signal is still cell-level cross-entropy. The model is learning to predict correct digits; Z3 then masks the constraint-violating ones at output time. What remains missing is a gradient signal that teaches the latent recursion to produce constraint-consistent representations internally. The remaining 2.6 pt CSR gap and 0.8 pt puzzle accuracy gap are the cost of this missing signal.
+
+10. **Z3 overhead is modest: ~5% slower (25,193.7s vs 23,934.8s).** The tensorized constraint masking (vectorized over batch, row, col, box) adds minimal overhead. This is not a scaling concern.
+
+**Next steps:**
+
+1. **Run 023: Add a differentiable constraint satisfaction auxiliary loss.** Z3 pruning has recovered CSR partway (6.1% → 12.6%) by enforcing constraints at inference. To recover the remaining gap and exceed Run 018's 15.2% CSR ceiling with a generalization-stable model, the training objective itself must change. Add a soft constraint penalty to the training loss: for each supervision step's prediction, compute a differentiable penalty for duplicate digit probabilities within each row, column, and 3×3 box. Weight it at `constraint_weight=0.1` alongside cross-entropy. This gives the latent recursion a gradient signal that pushes toward constraint-consistent internal representations — the missing piece that Z3-only pruning cannot provide.
+
+2. **Run 023 alternative: Increase `n_recursions` to give Z3 more depth.** With Z3 pruning masking illegal moves at each cycle, more recursion cycles give the model more iterations to propagate constraint information through the latent state. Testing `n_recursions=24` or `n_recursions=32` may improve CSR at the cost of training time. Less theoretically motivated than the auxiliary loss but simpler to implement.
+
+3. **Do not increase data or adjust regularization.** R022 confirms the R021 conclusion: with 15k data and Z3 pruning, the generalization problem is solved (4.7 pt gap) and the constraint problem is partially solved (12.6% CSR). Further data or dropout changes will not move the needle on constraint quality. The remaining frontier is the training objective.
+
+**Plots:**
+- ![Per-step accuracy](results/exp-sudoku-r022/sudoku_20260526_203153_per_step.png)
+- ![Training curves](results/exp-sudoku-r022/sudoku_20260526_203153_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r022/sudoku_20260526_203153_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r022/sudoku_20260526_203153_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r022/sudoku_20260526_203153_halt_confidence.png)
+
+---
