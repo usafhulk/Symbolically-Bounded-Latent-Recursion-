@@ -1825,3 +1825,110 @@ Peak val at epoch 40. Post-peak decay: 59.70% → 58.89% = **0.81 pts**. Final t
 - ![Halt confidence](results/exp-sudoku-r022/sudoku_20260526_203153_halt_confidence.png)
 
 ---
+
+### Run 023 — `exp/sudoku/r023` — Constraint Auxiliary Loss (constraint_weight=0.1, Z3=False)
+
+**Hypothesis:** R022 proved Z3 inference-time pruning partially recovers CSR (6.1% → 12.6%) but cannot exceed ~12.6% because no gradient flows back through constraint violations. Adding a differentiable constraint auxiliary loss — penalizing non-uniform digit probability distributions within each row, column, and 3×3 box — should give the latent recursion a direct gradient signal pointing toward valid Sudoku structure, pushing CSR beyond the R022 ceiling and potentially past R018's 15.2% baseline.
+
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| **constraint_weight** | **0.1** (new — applied to final supervision step) |
+| num_epochs | 100 |
+| num_train / num_val | 15,000 / 1,000 |
+| givens range | 17–35 |
+| use_z3_pruning | **False** (isolating constraint loss as single variable vs R021) |
+| dropout | 0 |
+| total steps | 31,300 |
+| training time | **~6.43 hours (23,170.5 s)** |
+| device | cuda (L4) |
+| timestamp | 2026-05-27 16:40:27 |
+
+**Results:**
+
+| Metric | Run 023 (CL=0.1, Z3=False) | Run 022 (Z3=True, CL=0) | Run 021 (baseline) | Delta vs 021 | Delta vs 022 |
+|---|---|---|---|---|---|
+| Cell accuracy | **57.81%** | 57.29% | 57.60% | +0.21 pts | +0.52 pts |
+| Puzzle accuracy | **3.1%** | 4.0% | 2.8% | +0.3 pts | −0.9 pts |
+| Constraint satisfaction | **7.2%** | 12.6% | 6.1% | +1.1 pts | **−5.4 pts** |
+| Best val accuracy | **59.64%** | 59.70% | 59.75% | −0.11 pts | −0.06 pts |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | Val Acc | Train Acc | Gap |
+|---|---|---|---|
+| 10 | 58.20% | 57.36% | **−0.84 pts** (val ahead) |
+| 20 | 59.17% | 58.45% | **−0.72 pts** (val ahead) |
+| 30 | 59.36% | 58.87% | **−0.49 pts** (val ahead) |
+| 40 | 59.46% | 59.19% | **−0.27 pts** (val ahead) |
+| 50 | 59.55% | 60.02% | +0.47 pts |
+| **60** | **59.64%** | **60.21%** | **+0.57 pts** ← peak |
+| 70 | 59.49% | 60.92% | +1.43 pts |
+| 80 | 59.49% | 61.86% | +2.37 pts |
+| 90 | 59.45% | 62.28% | +2.83 pts |
+| 100 | 59.39% | 62.23% | +2.84 pts |
+
+Post-peak decay: 59.64% → 59.39% = **0.25 pts** — the flattest and most stable val curve across all runs. Final gap: **2.84 pts** — best of any run at epoch 100.
+
+**Diagnostics:**
+
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 17.538 | 49.54 | — | 0.624 |
+| 1 | 17.354 | 106.09 | 0.892 | 0.628 |
+| 2 | 17.306 | 166.42 | 0.989 | 0.627 |
+| 3 | 17.289 | 228.25 | 0.997 | 0.622 |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 59.26% |
+| 1 | 59.42% |
+| 2 | 59.44% |
+| 3 | 59.39% |
+
+**Key findings:**
+
+1. **Constraint loss alone is weaker than Z3 alone: CSR 7.2% vs 12.6%.** The auxiliary loss does marginally improve over the R021 baseline (6.1% → 7.2%, +1.1 pts), but produces far less constraint recovery than Z3 inference-time masking (12.6%). The gradient signal from `constraint_weight=0.1` is being absorbed primarily into cell-level accuracy rather than producing coherent global constraint representations. This suggests the weight is either too weak to dominate, or the signal arrives too late in the computation (only at `predictions[-1]`) to reshape the latent trajectory meaningfully.
+
+2. **Epoch-1 collapse: train accuracy 17.3%.** The constraint penalty hit catastrophically at random initialization, when every prediction maximally violates row/col/box constraints. The combined loss (CE + 0.1 × constraint) spiked to 2.086 at epoch 1 — nearly double R022's starting loss of 1.228. The model spent epochs 2–5 recovering to baseline cell accuracy rather than learning constraint structure. This initialization sensitivity is a clear design flaw: `constraint_weight=0.1` applied cold is too aggressive.
+
+3. **Val accuracy ran ahead of train for the first 50 epochs.** The epoch-1 disruption created persistent underfitting in the early phase — the model was constrained and regularized so heavily that it generalized better than it trained. This is the first time across all BPTT runs where val accuracy has exceeded train accuracy at any checkpoint. While superficially positive, it reflects undertrained cell-level representations rather than genuine constraint-driven generalization.
+
+4. **Y-norms highest of the BPTT era: 228.25 at step 3.** Without Z3 masking the illegal logit space, and with the constraint penalty pushing the model to distribute digit probability more uniformly, the scratchpad accumulates more energy per cycle than any prior run (R021: 205.08, R022: 131.11). The model is generating more diverse internal hypotheses — working harder — but without the structural pruning of Z3, this effort does not translate to valid outputs.
+
+5. **Z-norms returned to R021 levels (~17.3–17.5) vs R022's compressed (15.6).** The z_norm compression in R022 was driven by Z3 logit masking collapsing the output distribution. The constraint loss gradient does not produce the same structural compression of the latent manifold. These are fundamentally different mechanisms: Z3 prunes the hypothesis space externally; the constraint loss nudges gradient descent internally.
+
+6. **Step-1 z_cosine (0.892) similar to R021 (0.886), far below R022 (0.934).** Without Z3 masking, consecutive macro-step latent states remain divergent. The constraint gradient alone does not tighten the latent trajectory between supervision cycles. The high cosine similarity in R022 was specifically a product of the narrowed hypothesis space from logit masking.
+
+7. **Best val accuracy slightly decreased: 59.64% vs 59.75% R021.** The constraint loss added optimization noise without a proportional signal benefit. At weight=0.1, it is strong enough to disrupt training (epoch-1 collapse, early underfitting) but not strong enough to drive the model toward constraint-consistent internal states.
+
+8. **The training curves confirm the loss is stabilizing well by epoch 60+.** Despite the epoch-1 spike to 2.086, the loss converged smoothly to 0.921 by epoch 100, and the val curve is the most stable across all runs (0.25 pt post-peak decay). The architecture can absorb the constraint signal without instability once past the initialization shock.
+
+9. **The combination of Z3 + constraint loss has not been tested.** R022 tested Z3 alone; R023 tested constraint loss alone. Neither fully recovers the CSR ceiling. R022 achieved 12.6% CSR via structural output enforcement; R023 achieved only 7.2% via gradient nudging. The natural hypothesis is that they are complementary — Z3 enforces validity structurally while the constraint loss teaches the latent recursion to produce constraint-consistent representations internally, making Z3's job easier.
+
+**Next steps:**
+
+1. **Run 024: Combine Z3 pruning + constraint auxiliary loss (`use_z3_pruning=True`, `constraint_weight=0.1`).** This is the first test of both mechanisms simultaneously. Z3 enforces valid outputs structurally, while the constraint loss provides gradient signal that flows back through the latent recursion. Together they address both the output-level and representation-level aspects of objective misalignment. Expected: CSR should break through the R022 ceiling of 12.6% and potentially exceed R018's 15.2% for the first time.
+
+2. **Consider constraint weight warmup to avoid epoch-1 collapse.** The 17.3% epoch-1 train accuracy is a solved problem: ramp `constraint_weight` from 0 to 0.1 over the same warmup schedule as the learning rate (first 1,000 steps). This prevents the cold-start penalty shock without changing the steady-state training signal. Can be implemented as a one-line change to the loss computation.
+
+3. **Do not change architecture or data.** The 15k generalization baseline (R021–R023) is stable. All remaining variables to explore are in the training objective: Z3 on/off, constraint weight magnitude, and warmup schedule.
+
+**Plots:**
+- ![Per-step accuracy](results/exp-sudoku-r023/sudoku_20260527_101201_per_step.png)
+- ![Training curves](results/exp-sudoku-r023/sudoku_20260527_101201_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r023/sudoku_20260527_101201_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r023/sudoku_20260527_101201_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r023/sudoku_20260527_101201_halt_confidence.png)
+
+---
