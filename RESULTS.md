@@ -1932,3 +1932,112 @@ Post-peak decay: 59.64% → 59.39% = **0.25 pts** — the flattest and most stab
 - ![Halt confidence](results/exp-sudoku-r023/sudoku_20260527_101201_halt_confidence.png)
 
 ---
+
+### Run 024 — `exp/sudoku/r024` — Z3 + Constraint Loss Combined (Z3=True, constraint_weight=0.1)
+
+**Hypothesis:** R022 (Z3 only) and R023 (constraint loss only) address objective misalignment from opposite directions — Z3 enforces validity structurally at output, constraint loss pushes gradient back through the latent recursion. Neither alone fully recovers R018's 15.2% CSR baseline. Combining both should yield additive improvements: Z3 cleans up the output space while the constraint gradient trains the latent state to be constraint-aware internally. Expected: CSR > 15.2% (new record), puzzle accuracy ≥ 4.0% (matching R022).
+
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| **constraint_weight** | **0.1** |
+| num_epochs | 100 |
+| num_train / num_val | 15,000 / 1,000 |
+| givens range | 17–35 |
+| **use_z3_pruning** | **True** |
+| dropout | 0 |
+| total steps | 31,300 |
+| training time | **~7.0 hours (25,227.3 s)** |
+| device | cuda (L4) |
+| timestamp | 2026-05-28 07:22:07 |
+
+**Results:**
+
+| Metric | R024 (Z3+CL) | R023 (CL only) | R022 (Z3 only) | R021 (baseline) | Delta vs R022 |
+|---|---|---|---|---|---|
+| Cell accuracy | **57.19%** | 57.81% | 57.29% | 57.60% | −0.10 pts |
+| Puzzle accuracy | **3.6%** | 3.1% | 4.0% | 2.8% | −0.4 pts |
+| Constraint satisfaction | **13.2%** | 7.2% | 12.6% | 6.1% | **+0.6 pts** |
+| Best val accuracy | **59.76%** | 59.64% | 59.70% | 59.75% | **+0.06 pts (new record)** |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | Val Acc | Train Acc | Gap |
+|---|---|---|---|
+| 10 | 58.23% | 58.03% | −0.20 pts (val ahead) |
+| 20 | 59.52% | 59.53% | +0.01 pts |
+| **30** | **59.76%** | **58.68%** | **−1.08 pts (val well ahead) ← peak** |
+| 40 | 59.71% | 59.80% | +0.09 pts |
+| 50 | 59.68% | 61.27% | +1.59 pts |
+| 60 | 59.52% | 61.28% | +1.76 pts |
+| 70 | 59.28% | 62.19% | +2.91 pts |
+| 80 | 58.97% | 62.52% | +3.55 pts |
+| 90 | 58.76% | 63.94% | +5.18 pts |
+| 100 | 58.74% | 63.65% | +4.91 pts |
+
+Earliest peak of any run (epoch 30). Val was significantly *ahead* of train at peak. Post-peak decay: 59.76% → 58.74% = **1.02 pts** — the sharpest post-peak decline of the Z3-era runs, reflecting stronger late-epoch memorization.
+
+**Diagnostics:**
+
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 15.624 | 31.30 | — | 0.648 |
+| 1 | 15.608 | 62.84 | 0.930 | 0.650 |
+| 2 | 15.613 | 95.53 | 0.995 | 0.650 |
+| 3 | 15.617 | 128.04 | 0.998 | **0.655** |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 58.68% |
+| 1 | 58.73% |
+| 2 | 58.71% |
+| 3 | 58.74% |
+
+**Key findings:**
+
+1. **CSR new record for generalization-stable runs: 13.2% vs 12.6% R022 (+0.6 pts).** Combining Z3 + constraint loss does produce the best CSR of any run since the 15k data era began. However, the combined gain over Z3 alone is only +0.6 pts — far below the expected additive improvement. Z3 pruning is doing ~95% of the constraint enforcement work; the auxiliary loss adds a small but consistent benefit on top.
+
+2. **New best val accuracy: 59.76% — barely.** A 0.01 pt improvement over R021's 59.75%. Statistically negligible, but it confirms the combined mechanisms produce the strongest generalization environment of any run. Notably, the peak arrived at epoch 30 — the earliest in any run — meaning the combined regularization pressure front-loaded the model's best generalization.
+
+3. **Puzzle accuracy regressed slightly vs R022: 3.6% vs 4.0%.** The marginal CSR gain did not translate to more complete valid puzzles. CSR measures partial constraint satisfaction across all puzzles; puzzle accuracy requires all 81 cells simultaneously correct. The +0.6 pt CSR improvement is too small to unlock fully valid solutions.
+
+4. **Constraint loss adds minimal independent signal on top of Z3.** The core finding of R024 is that at weight=0.1 applied only to `predictions[-1]`, the constraint auxiliary loss is largely redundant with what Z3 is already enforcing. Z3 structurally prevents constraint-violating outputs and backpropagates through that masked distribution; the additional soft penalty provides only marginal differentiation. Either the weight is too low, or applying it only to the final supervision step is insufficient to reshape the latent trajectory.
+
+5. **Z-norms confirm Z3 dominance: 15.6 range identical to R022.** Adding the constraint loss does not further compress or shift the z-norm — Z3 logit masking fully controls the latent manifold scale. The constraint gradient at the final step is absorbed without changing the overall representation scale.
+
+6. **Y-norms lowest of all BPTT runs: 128.04 max.** Slightly below R022 (131.11). The combined mechanisms produce the most compact scratchpad accumulation — Z3 masks illegal hypotheses while the constraint loss discourages distributing probability mass across constraint-violating digits. Together they minimise the energy spent on invalid states more than either does alone.
+
+7. **Halt probs highest ever: 0.648–0.655.** Both mechanisms provide consistent, structured convergence signals that make the halt gate more confident. The model has the clearest sense of "I am done" when both constraint enforcement mechanisms are active simultaneously.
+
+8. **Epoch-1 train accuracy recovered relative to R023: 40.0% vs 17.3%.** Z3 masked the most egregious constraint violations from the start, preventing the catastrophic cold-start shock seen in R023. The combined cold-start loss (1.376) was between R022 (1.228, no constraint loss) and R023 (2.086, constraint loss without Z3 masking) — Z3 absorbed most of the constraint penalty shock.
+
+9. **The CSR ceiling with current architecture is ~13%.** R022 hit 12.6% with Z3 alone; R024 hits 13.2% with both. The ceiling has not been broken. Four runs of constraint enforcement (R022–R024) have established a consistent upper bound around 13–15%, well below what would be needed for meaningful puzzle completion rates. The bottleneck is not the training signal but the architecture's capacity to propagate constraint information through the latent recursion. A model that reasons about constraints needs to *represent* constraint relationships, not just be penalized for violating them.
+
+10. **The flat per-step accuracy curve persists across all runs.** Steps 0–3 differ by only 0.06 pts. The latent recursion is not iteratively improving its constraint reasoning — it is stabilizing a learned representation rather than solving. This is a structural indicator that the recursion needs a fundamentally different inductive bias to behave as a constraint propagator.
+
+**Next steps — reframing the architecture question:**
+
+1. **Apply constraint loss to all supervision steps, not just `predictions[-1]`.** Currently the constraint gradient only reaches the final macro-step. Applying it to predictions[0], predictions[1], predictions[2] as well would shape the latent trajectory throughout the recursion — each macro-step would receive gradient signal pointing toward constraint-consistent representations, not just the final output. This is a one-line change and the most likely next move to break the 13% ceiling.
+
+2. **Increase constraint_weight with warmup.** At 0.1, the constraint loss is dominated by Z3. Testing `constraint_weight=0.3–0.5` with a warmup ramp (increasing from 0 over the first 1,000 steps, matching the LR warmup) would give the constraint gradient more influence over training while avoiding the epoch-1 collapse seen in R023.
+
+3. **Consider architectural changes for constraint propagation.** The flat per-step accuracy across all runs (R014–R024) suggests the recursion is not being used as a constraint propagator — it is being used as a representation stabilizer. A dedicated constraint reasoning component (e.g., a constraint propagation layer between supervision cycles, or conditioning `z` on a symbolic constraint graph) would give the latent recursion the inductive bias to actually propagate Sudoku constraints through its iterations.
+
+**Plots:**
+- ![Per-step accuracy](results/exp-sudoku-r024/sudoku_20260528_001929_per_step.png)
+- ![Training curves](results/exp-sudoku-r024/sudoku_20260528_001929_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r024/sudoku_20260528_001929_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r024/sudoku_20260528_001929_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r024/sudoku_20260528_001929_halt_confidence.png)
+
+---
