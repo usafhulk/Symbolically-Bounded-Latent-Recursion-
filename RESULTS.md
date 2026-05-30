@@ -2041,3 +2041,114 @@ Earliest peak of any run (epoch 30). Val was significantly *ahead* of train at p
 - ![Halt confidence](results/exp-sudoku-r024/sudoku_20260528_001929_halt_confidence.png)
 
 ---
+
+### Run 025 — `exp/sudoku/r025` — Constraint Loss on All Supervision Steps + Warmup (Z3=True, constraint_weight=0.1, full-trajectory)
+
+**Hypothesis:** R024 found that combining Z3 + constraint loss improves CSR to 13.2% — a new record — but that the constraint loss applied only to `predictions[-1]` provides minimal additional signal over Z3 alone (+0.6 pts). The constraint gradient only reaches the final macro-step, leaving the latent trajectory through steps 0–2 unshaped by any constraint signal. Applying the constraint loss to all four supervision steps (`predictions[0]` through `predictions[3]`) gives the latent recursion constraint-gradient signal at every macro-step, potentially pushing representations toward constraint-consistent structure at every depth. A warmup ramp on `constraint_weight` (0 → 0.1 over the first ~1,000 steps) prevents the epoch-1 collapse seen in R023. Expected: CSR > 13.2% (breaking the R022–R024 ceiling), with stable generalization.
+
+| Parameter | Value |
+|---|---|
+| dim | 512 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 16 |
+| n_cycles | 3 |
+| n_supervision | 4 |
+| batch_size | 48 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| **constraint_weight** | **0.1 (with warmup, applied to all supervision steps)** |
+| num_epochs | 100 |
+| num_train / num_val | 15,000 / 1,000 |
+| givens range | 17–35 |
+| **use_z3_pruning** | **True** |
+| dropout | 0 |
+| total steps | 31,300 |
+| training time | **~6.9 hours (24,984.2 s)** |
+| device | cuda (L4) |
+| timestamp | 2026-05-29 01:43:47 |
+
+**Results:**
+
+| Metric | R025 (Z3+CL all steps) | R024 (Z3+CL final step) | R022 (Z3 only) | R021 (baseline) | Delta vs R024 |
+|---|---|---|---|---|---|
+| Cell accuracy | **57.24%** | 57.19% | 57.29% | 57.60% | +0.05 pts |
+| Puzzle accuracy | **3.7%** | 3.6% | 4.0% | 2.8% | +0.1 pts |
+| Constraint satisfaction | **10.5%** | 13.2% | 12.6% | 6.1% | **−2.7 pts** |
+| Best val accuracy | **59.52%** | 59.76% | 59.70% | 59.75% | **−0.24 pts** |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | Val Acc | Train Acc | Gap |
+|---|---|---|---|
+| 10 | 58.31% | 57.86% | −0.45 pts (val ahead) |
+| 20 | 59.37% | 58.80% | −0.57 pts (val ahead) |
+| **30** | **59.52%** | **58.40%** | **−1.12 pts (val well ahead) ← peak** |
+| 40 | 59.47% | 59.78% | +0.31 pts |
+| 50 | 59.41% | 61.54% | +2.13 pts |
+| 60 | 59.41% | 60.57% | +1.16 pts |
+| 70 | 59.17% | 61.97% | +2.80 pts |
+| 80 | 58.89% | 62.12% | +3.23 pts |
+| 90 | 58.91% | 62.22% | +3.31 pts |
+| 100 | 58.80% | 63.97% | +5.17 pts |
+
+Peak at epoch 30 — matching R024's earliest-peak record. Post-peak decay: 59.52% → 58.80% = **0.72 pts** (flatter than R024's 1.02 pts, but from a lower ceiling). Final train/val gap: **5.17 pts**. Epoch-1 training accuracy: **40.2%** — warmup fully prevented the cold-start collapse seen in R023 (17.3%), reproducing R024's 40.0% cold-start behavior.
+
+**Diagnostics:**
+
+| Step | z norm | y norm | z cosine | halt prob |
+|---|---|---|---|---|
+| 0 | 15.677 | 32.71 | — | 0.642 |
+| 1 | 15.664 | 65.95 | 0.926 | 0.644 |
+| 2 | 15.669 | 99.97 | 0.996 | 0.646 |
+| 3 | 15.674 | 134.08 | 0.999 | **0.650** |
+
+**Per-step cell accuracy:**
+
+| Step | Accuracy |
+|---|---|
+| 0 | 58.65% |
+| 1 | 58.72% |
+| 2 | 58.80% |
+| 3 | 58.80% |
+
+**Key findings:**
+
+1. **Full-trajectory constraint gradients regressed CSR: 10.5% vs R024's 13.2% (−2.7 pts).** This is the central and counterintuitive result of R025. Applying the constraint loss to all four supervision steps made constraint satisfaction significantly *worse* than applying it to only the final step. The hypothesis that more constraint gradient exposure across the latent trajectory would improve coherence was wrong.
+
+2. **Why the regression: competing gradients at intermediate steps.** In R024, supervision steps 0–2 received only cross-entropy gradient — a clean signal for learning cell-level representations. Step 3 alone received the constraint penalty. In R025, all four steps receive both CE and constraint gradient simultaneously. At intermediate macro-steps (0–2), the model is still building its representation — the constraint penalty at these steps competes with the CE gradient before the representation is mature, pushing toward locally constraint-consistent but globally suboptimal intermediate states. The constraint gradient "corrects too early," disrupting the representational scaffolding that the final step depends on.
+
+3. **Best val accuracy dropped: 59.52% vs R024's 59.76% (−0.24 pts).** Spreading the constraint loss across all supervision steps slightly degraded generalization. The additional optimization pressure at intermediate steps appears to narrow the loss landscape, reducing the model's ability to generalize beyond training examples.
+
+4. **Puzzle accuracy and cell accuracy were essentially unchanged (+0.1 and +0.05 pts vs R024).** The regression is concentrated almost entirely in CSR — the metric most sensitive to multi-cell constraint coherence. Individual cell accuracy is not harmed by the multi-step constraint gradient; only the coordinated global constraint structure is disrupted.
+
+5. **Warmup is confirmed effective.** Epoch-1 training accuracy of 40.2% (matching R024) confirms the warmup ramp prevents the cold-start collapse seen in R023. Warmup should be carried forward in any future run using constraint loss.
+
+6. **Z-norms remain in the 15.6–15.7 band — Z3 controls the latent manifold scale.** Near-identical z-norms to R024 confirm that Z3 logit masking, not the constraint loss, governs the latent geometry. Adding constraint gradients across all steps does not further compress or shift the z-norm.
+
+7. **Y-norms slightly higher than R024: 134.08 vs 128.04.** Applying constraint gradient at earlier steps causes slightly more scratchpad energy accumulation — the model is working harder to reconcile conflicting gradient signals across the recursion, generating more diverse intermediate hypotheses without producing better final outputs.
+
+8. **Halt probabilities slightly lower: 0.642–0.650 vs R024's 0.648–0.655.** The multi-step constraint gradient introduces noise into the halt gate's training signal by making intermediate step representations less reliable. The model is marginally less confident in its halting decisions when constraint pressure is applied at all depths simultaneously.
+
+9. **Per-step accuracy arc is marginally wider (58.65% → 58.80%, +0.15 pts) than R024 (+0.06 pts).** The per-step constraint gradient provides a tiny amount of measurable step-to-step improvement — the model is slightly more iteratively consistent under full-trajectory supervision. But this does not translate to CSR gain; the coordination disruption outweighs the iterative signal.
+
+10. **The constraint-gradient approach to breaking the CSR ceiling has been exhausted.** The four constraint-enforcement runs (R022–R025) now map the full design space: Z3 only (12.6%), constraint loss on final step only (7.2%), Z3 + constraint loss on final step (13.2%), Z3 + constraint loss on all steps with warmup (10.5%). The highest CSR is achieved by the most conservative application — adding constraint gradient to more steps consistently hurts rather than helps. Further tuning of weight, schedule, or step-selection will yield marginal changes within this 10–13% band, not a qualitative breakthrough.
+
+11. **The flat per-step accuracy curve persists across all constraint-enforcement variants.** Steps 0–3 differ by at most 0.15 pts in any configuration (R022–R025). The latent recursion is not functioning as an iterative constraint propagator in any tested variant — it continues to act as a representation stabilizer. This is a structural indicator, not a training-signal problem.
+
+**Next steps — architectural pivot:**
+
+1. **The constraint-gradient axis is exhausted at this architecture.** Runs R022–R025 have comprehensively tested the training-objective space with the current architecture. None has broken through 13.2% CSR or changed the flat per-step accuracy profile. The bottleneck is structural: the TRM's transformer layers have no inductive bias toward Sudoku constraint-group structure (row/column/box), and gradient nudging cannot induce that bias emergently.
+
+2. **A dedicated constraint-propagation architectural component is needed.** A constraint-aware layer that explicitly attends over each row, column, and 3×3 box group separately — inserted between supervision cycles — would give the latent recursion native constraint-propagation primitives rather than relying on general attention to discover constraint topology from data alone. This is the architectural intervention the flat per-step accuracy profile has been pointing to since R014.
+
+3. **Consider Loopy Belief Propagation-style message-passing between constraint groups.** A layer where each cell sends and receives messages from its row, column, and box neighbors would allow the model to propagate constraint violations structurally through the recursion. This operates on the latent representation before decoding — an integration point fundamentally different from Z3 logit masking (output-level) or auxiliary loss (gradient-level) — giving the recursion a genuine constraint-satisfaction primitive.
+
+**Plots:**
+- ![Per-step accuracy](results/exp-sudoku-r025/sudoku_20260528_184504_per_step.png)
+- ![Training curves](results/exp-sudoku-r025/sudoku_20260528_184504_training_curves.png)
+- ![Z-state evolution](results/exp-sudoku-r025/sudoku_20260528_184504_z_state.png)
+- ![Scratchpad heatmap](results/exp-sudoku-r025/sudoku_20260528_184504_scratchpad.png)
+- ![Halt confidence](results/exp-sudoku-r025/sudoku_20260528_184504_halt_confidence.png)
+
+---
