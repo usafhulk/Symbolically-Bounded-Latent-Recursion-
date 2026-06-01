@@ -2325,3 +2325,99 @@ The scale run (`scale_mode=True`) resolves this. If K=4 breaks above chance and 
 - ![Scratchpad](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_scratchpad.png)
 
 ---
+### Run pc-r003 — `exp/pointer_chase/r003` — Encoder Fix: Ordered Concatenation (L=16, 100 epochs, num_train=20,000)
+
+**Hypothesis:** The sum encoder in pc-r002 destroyed map-ordering information that composition fundamentally depends on — `map1∘map2` ≠ `map2∘map1`, but a sum cannot distinguish them. Replacing the sum with an ordered concatenation + linear projection (one variable changed, everything else identical) should unblock K=2 learning. Whether K=4 also lifts off chance will reveal whether the bottleneck was purely representational or runs deeper.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [1, 2, 4, 8] |
+| Kmax | 8 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 100 |
+| max_steps | 50,000 |
+| num_train / num_val | 20,000 / 2,000 |
+| encoder | **concat + Linear(Kmax×dim, dim)** — replaces sum |
+| device | cuda |
+| training time | TRM ~4.5 h (16,029.7 s), Baseline ~8.7 min (521.5 s) |
+| timestamp | 2026-06-01 16:01:36 |
+
+**Results — eval by required depth K (final step accuracy):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) | vs pc-r002 TRM |
+|---|---|---|---|---|---|
+| 1 | **1.000** | **1.000** | 0.000 | 0.0625 | — |
+| 2 | **1.000** | **0.9998** | +0.000 | 0.0625 | **+0.646 ↑** |
+| 4 | 0.059 | 0.063 | −0.004 | 0.0625 | −0.006 |
+| 8 | 0.067 | 0.058 | +0.009 | 0.0625 | +0.008 |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | TRM val | Baseline val |
+|---|---|---|
+| 10 | 51.82% | 53.51% |
+| **20** | **53.50%** | **53.71% ← peak** |
+| **30** | **53.69%** | 53.51% |
+| **40** | **53.77% ← peak** | 53.46% |
+| 50 | 53.50% | 53.47% |
+| 60 | 53.47% | 53.53% |
+| 70 | 53.56% | 53.50% |
+| 80 | 53.50% | 53.47% |
+| 90 | 53.60% | 53.50% |
+| 100 | 53.61% | 53.48% |
+
+TRM train accuracy at epoch 100: **100%** (loss → 0.0). Baseline train accuracy: **100%** (loss → 0.0). Both models memorize the 20k training set completely.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z-decode (partial) | y-decode (final) |
+|---|---|---|---|---|---|---|
+| 0 | 8.085 | 40.96 | — | **1.000** | 0.537 | 0.627 |
+| 1 | 8.092 | 108.69 | **0.647** | 1.000 | 0.617 | 0.632 |
+| 3 | 8.095 | 270.64 | 0.995 | 1.000 | 0.614 | 0.633 |
+| 7 | 8.096 | 611.95 | 0.9995 | 1.000 | 0.633 | 0.633 |
+
+**Key findings:**
+
+1. **Encoder fix confirmed correct — K=2 went from 35.4% to 100%.** Changing only the encoder (sum → ordered concat + projection) fully solved K=2 for both models. This proves that the ordered map sequence IS the information K=2 composition requires, and the sum encoder in pc-r002 was discarding it. The representation fix worked as predicted.
+
+2. **K=2 solved equally well by TRM and single-pass baseline.** With properly ordered input, 2-hop composition is learnable in a single forward pass (baseline: 99.97%). The TRM adds no advantage at K=2. This means K=2 does not require recursion — given direct access to `[map₁[i], map₂[i]]` in order, one attention pass can learn the lookup. The recursion is not needed for, and not used on, K=2.
+
+3. **K=4 and K=8 remain at chance for both models — the encoder was not the K=4 bottleneck.** After ruling out the representation failure, K=4 still sits at 5.9% (TRM) and 6.3% (baseline) against chance 6.25%. The bottleneck at K=4 is not information loss in the encoder. The model has the four ordered maps directly available and still cannot compose them.
+
+4. **Extreme overfitting — both models memorize to 100% train accuracy.** Train loss reaches 0.0 for both TRM and baseline by epoch ~85. Val accuracy is capped at ~53.7%, fully accounted for by K=1 (100%) + K=2 (100%) + K=4 (5.9%) + K=8 (6.7%): (1.0 + 1.0 + 0.059 + 0.067) / 4 ≈ 53.2%. The model learned every specific K=4 training instance but not the composition rule — a pure memorization wall.
+
+5. **halt_prob = 1.000 at step 0** — the model halts before taking a single recursion step. This is maximum front-loading. Even with ordered map access, the model computes its answer in a single forward pass and signals done immediately. The halt gate is not being learned as "continue until composition is complete."
+
+6. **z_cosine drops to 0.647 on the first step (lower than pc-r002's 0.950)** — the encoder fix caused the first update to be more meaningful than before. But z then converges immediately: cosines jump to 0.920, 0.979, 0.995, 0.999 by steps 2–4, and are effectively stationary thereafter. There is one real update, then the recursion idles.
+
+7. **z_decode_acc elevated (0.537–0.633)** — higher than pc-r002 (0.399–0.430), reflecting K=2 now being correctly represented in z. The partial-composition signal in z is real but static — it is not building across steps. Given halt_prob=1.0 at step 0, z simply isn't being updated, so the decode of z at later steps reflects what step 0 computed, not progressive composition.
+
+**Interpretation:**
+
+pc-r003 gives two clean findings from one variable change:
+
+- **Representational finding (resolved):** The sum encoder was the bottleneck for K=2. Ordered concatenation fixes it. K=2 composition is trivially learnable with proper ordering — in a single pass.
+- **Compositional finding (open):** K=4 is not a representation problem. The model has full ordered access to 4 maps and still cannot generalize 4-hop composition. The failure mode is now precisely identified: **memorization**. Both models overfit to 100% training accuracy but fail to learn a generalizable composition rule. With only 20k instances, the K=4 composition space is sparse enough to memorize, so the model does.
+
+The next test is unambiguous: remove the memorization escape hatch. Fixed K=4, 100k+ training instances makes memorizing the training set infeasible. If the TRM can then learn K=4 and the matched single-pass baseline cannot, functional recursion is confirmed. If both fail, the limitation is architectural.
+
+**Next experiment:** Fixed K=4 only, num_train=100,000+, same architecture and matched baseline. Memorization-resistant configuration. Watch for K=4 breaking above chance and TRM-vs-baseline gap opening.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_z_state.png)
+- ![Introspection](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_introspection.png)
+- ![Scratchpad](results/exp-pointer_chase-r003/pointer_chase_20260601_112529_scratchpad.png)
+
+---
