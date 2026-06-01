@@ -2164,3 +2164,164 @@ This experiment is not an incremental adjustment to the constraint-enforcement l
 Once the floor is established, the faithfulness probe becomes interpretable. `diagnostic_forward` decodes raw z at each supervision step and compares against the ground-truth partial composition after s hops — not the final target. Comparing against the final target measures only whether z front-loads the answer; comparing against the partial composition after s maps measures whether z tracks *where in the chain the model currently is*. A z-decode accuracy curve that rises in step with the partial compositions is evidence that the latent state represents the intermediate reasoning state faithfully. The causal test — perturb z at step s and verify that the final answer changes exactly as the decode at step s predicts — completes the faithfulness argument. These two tests together (ground-truth partial match plus causal perturbation) constitute the introspection evidence the thesis requires; a plausible-looking decode curve alone is not sufficient. Together, the functional-recursion floor and the faithful-introspection probe form the two-part empirical foundation the thesis needs: the model iterates, and that iteration is interpretable from the inside.
 
 ---
+
+## Pointer-Chasing Runs (2026-05-31)
+
+---
+
+### Run pc-r001 — `exp/pointer_chase/r001` — Plumbing / Architecture Test (L=8, 10 epochs)
+
+**Purpose:** Confirm the full pipeline runs end-to-end before committing GPU time. Not an experiment — results at 10 epochs with 2,000 training instances are noise, not signal.
+
+| Parameter | Value |
+|---|---|
+| L | 8 |
+| K_values | [1, 2, 4] |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| num_epochs | **10** |
+| num_train / num_val | **2,000 / 1,000** |
+| device | cuda |
+| training time | TRM 161.6 s, Baseline 4.8 s |
+| timestamp | 2026-05-31 20:12:24 |
+
+**Results:**
+
+| Model | Best val acc | K=1 | K=2 | K=4 |
+|---|---|---|---|---|
+| TRM | 0.152 | 0.195 | 0.123 | 0.136 |
+| Baseline | 0.130 | 0.138 | 0.129 | 0.122 |
+| Chance | — | 0.125 | 0.125 | 0.125 |
+
+**What it confirmed:**
+
+1. **Leakage check passed clean.** K=4 row: every shallow predictor at 0.12–0.13 against chance 0.125. `two_maps` correctly scores 1.0 at K=2 (it is the K=2 answer) and collapses to chance at K=4. Task is shortcut-free.
+2. **Pipeline runs.** Dataset generation, leakage gate, encoder, TRM + baseline training, eval-by-K, diagnostic_forward, plots, and JSON push all executed without error.
+3. **Introspection instrument working.** z-decode-vs-partial-composition rose 0.33 → 0.46 across supervision steps. This is the right measurement (partial composition, not final target); at this training level it reads as "instrument functional," not "faithfulness signal."
+4. **Neither model has learned anything.** Both at/near chance. Expected — 10 epochs, 2,000 instances, L=8 is a smoke test, not a result.
+
+**Diagnostics (TRM):**
+
+| Step | z norm | y norm | z cosine | halt prob | z-decode | y-decode |
+|---|---|---|---|---|---|---|
+| 0 | 15.90 | 14.71 | — | 0.475 | 0.330 | 0.455 |
+| 3 | 15.91 | 75.12 | 0.996 | 0.503 | 0.453 | 0.465 |
+| 7 | 15.91 | 164.52 | 0.999 | 0.509 | 0.461 | 0.459 |
+
+**Verdict:** Plumbing works. Proceed to real run with L=16, 100 epochs, num_train=20k.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_z_state.png)
+- ![Introspection](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_introspection.png)
+- ![Scratchpad](results/exp-pointer_chase-r001/pointer_chase_20260531_200541_scratchpad.png)
+
+---
+
+### Run pc-r002 — `exp/pointer_chase/r002` — First Real Run (L=16, 100 epochs, num_train=20,000)
+
+**Hypothesis:** With proper scale (L=16, K_values=[1,2,4,8], 20k training instances, 100 epochs), the TRM should begin to show a depth-K separation — solving low-K cleanly and outperforming the matched single-pass baseline at higher K as the recursion composes more maps. K=1 should approach 1.0 quickly (canary: if K=1 fails, the encoder is broken). K=4 and K=8 at chance means the recursion isn't composing; K=4/8 solved while baseline collapses is the functional-recursion floor.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [1, 2, 4, 8] |
+| Kmax | 8 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 100 |
+| max_steps | 50,000 |
+| num_train / num_val | 20,000 / 2,000 |
+| device | cuda |
+| training time | TRM ~4.3 h (15,633 s), Baseline ~7.5 min (452 s) |
+| timestamp | 2026-06-01 00:49:33 |
+
+**Results — eval by required depth K (final step accuracy):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 1 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 2 | 0.354 | 0.335 | +0.018 | 0.0625 |
+| 4 | 0.065 | 0.067 | −0.002 | 0.0625 |
+| 8 | 0.059 | 0.062 | −0.003 | 0.0625 |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | TRM val | Baseline val |
+|---|---|---|
+| 10 | 33.62% | 30.67% |
+| **20** | **37.75% ← peak** | **37.46% ← peak** |
+| 30 | 37.47% | 36.88% |
+| 40 | 37.35% | 36.93% |
+| 50 | 37.27% | 36.96% |
+| 60 | 37.13% | 37.09% |
+| 70 | 37.17% | 36.77% |
+| 80 | 37.16% | 36.97% |
+| 90 | 37.13% | 36.94% |
+| 100 | 37.25% | 36.90% |
+
+TRM train accuracy at epoch 100: **82.5%**. Baseline train accuracy: **66.2%**. Train/val gap at epoch 100: TRM +45 pts, baseline +28 pts — both significantly overfitting.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z-decode (partial) | y-decode (final) |
+|---|---|---|---|---|---|---|
+| 0 | 8.625 | 16.42 | — | 0.711 | 0.399 | 0.436 |
+| 1 | 8.656 | 29.92 | 0.950 | 0.820 | 0.420 | 0.440 |
+| 3 | 8.762 | 73.36 | 0.979 | 0.839 | 0.425 | 0.436 |
+| 7 | 8.887 | 181.99 | 0.997 | 0.846 | 0.430 | 0.435 |
+
+**Key findings:**
+
+1. **K=1 solved perfectly by both models — encoder and decoder are working.** 100.0% at K=1 is the most important single number in this run. It rules out an encoder bug and confirms that one-map composition is trivially learnable. The canary passed.
+
+2. **K=4 and K=8 are at chance for both — the recurrence is not composing at these depths.** 6.5% and 5.9% against chance 6.25% is indistinguishable from random. This is not ambiguous: the task has been verified shortcut-free (leakage check), so chance-level accuracy means neither model is performing sequential composition at K=4 or K=8. The recursion is not doing the work at this scale.
+
+3. **TRM shows no advantage over the single-pass baseline at any K ≥ 2.** At K=2, TRM leads by 1.8 pts (354 vs 335) — a small margin that could reflect statistical noise or the slight advantage of having 8 supervision steps rather than 1. At K=4 and K=8, the baseline is marginally *better* than the TRM (by ≈0.2 pts), though both are at chance. There is no depth-K separation. The recurrence is not demonstrably doing compositional work.
+
+4. **The overall val accuracy of 37.75% is fully explained by K=1.** Expected accuracy if K=1→100%, K=2→35.4%, K=4→6.5%, K=8→5.9%: (1.0 + 0.354 + 0.065 + 0.059) / 4 = 36.95% ≈ 37.75%. The model learned one thing — apply a single map — and the aggregate metric flatters it. Reporting pooled val accuracy alone would be deeply misleading; this is why eval-by-K is mandatory.
+
+5. **Val accuracy peaks at epoch 20 and declines thereafter.** Both models peak around epoch 20 (TRM 37.75%, baseline 37.46%) and do not improve further across 80 more epochs. The train accuracy continues rising to 82.5% (TRM), producing a growing train/val gap. The model is memorizing training instances, not generalizing the composition rule.
+
+6. **High z-cosines (0.95–0.997) confirm the latent state is barely evolving.** Across all 8 supervision steps, z rotates by less than 5% per step (cosine similarity 0.950–0.997). The recursion is not making meaningful updates to its internal state — it is essentially running the same representation through the network repeatedly and getting nearly the same z back each time. This is the latent-space version of the flat per-step accuracy profile from Sudoku.
+
+7. **High halt probability from step 0 (0.711).** The model signals it is done before it has had a chance to iterate. Combined with the high z-cosines, this confirms the model is front-loading all useful computation into step 0 and treating subsequent steps as a no-op. The halt gate is not being learned as "continue until composition is complete"; it is being learned as "stop immediately."
+
+8. **z-decode accuracy is flat and substantially above chance.** z-decode rises from 0.399 to 0.430 across steps (vs chance 0.0625), but the rise is inconsistent and the absolute values are above the final y-decode (0.435). z is decoding the answer better than chance, but the slight rise is not a clean "partial composition" signal — it likely reflects the K=1 sub-population dominating the diagnostic batch (those instances are already at 100% at step 0).
+
+**Interpretation:**
+
+This run answers one question cleanly and raises another. The clean answer: **at 100 epochs, dim=256, the TRM's recurrence does not perform meaningful sequential composition.** K=4 and K=8 at chance, no separation from the single-pass baseline, high z-cosines, and early halt all converge on the same picture — the recursion is not composing the K maps. This is an honest negative on functional recursion at this scale.
+
+The raised question: is this a *scale* failure or a *structural* failure? Two hypotheses are compatible with the data:
+
+- **Scale hypothesis:** The model needs much longer training or more data to generalize the composition rule. The train accuracy is still rising at epoch 100 (82.5%), suggesting the model has capacity it hasn't used. The correct experiment is the `scale_mode` run (K=4 fixed, 3,000 epochs) — if K=4 solves after much longer training while the baseline does not, the recursion is doing the work, just slowly.
+- **Structural hypothesis:** The TRM's weight-shared transformer layers have no inductive bias toward sequential composition of permutations. The model learns to apply a single map (K=1) because that is a direct lookup, but cannot compose multiple maps because the architecture does not provide primitives for chained application. In this case, longer training will not help — K=4 will remain at chance regardless of epochs.
+
+The scale run (`scale_mode=True`) resolves this. If K=4 breaks above chance and opens a TRM-vs-baseline gap as training scales, the scale hypothesis wins and functional recursion is present but data/compute-hungry. If K=4 remains at chance at 3,000 epochs, the structural hypothesis wins and the architecture needs to change. Either outcome is a clean finding.
+
+**Next experiment:** `scale_mode=True` — K_values=[4] fixed, num_epochs=3,000, num_train=50,000. Watch for K=4 breaking chance and TRM-vs-baseline separation opening up.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_z_state.png)
+- ![Introspection](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_introspection.png)
+- ![Scratchpad](results/exp-pointer_chase-r002/pointer_chase_20260531_202117_scratchpad.png)
+
+---
