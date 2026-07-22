@@ -2518,3 +2518,103 @@ The natural next intervention is hop-by-hop supervision: at recursion step s, ad
 - ![Scratchpad](results/exp-pointer_chase-r004/pointer_chase_20260717_161910_scratchpad.png)
 
 ---
+
+### Run pc-r005 — `exp/pointer_chase/r005` — Hop-by-Hop Z-Supervision (L=16, fixed K=4, 50 epochs, num_train=100,000)
+
+**Hypothesis:** pc-r004 confirmed that data scale alone cannot solve K=4 — the bottleneck is a missing learning signal that shapes z toward intermediate compositions. This run adds hop-by-hop auxiliary supervision: at recursion steps 0–3, cross-entropy is applied to z_aux_head(z) against the s-hop partial composition ground truth (λ=1.0). Steps 4–7 are unsupervised. A stop-gradient z_probe_head is trained in parallel as an honest probe of what z contains without interfering with the optimization. The matched multi-task baseline uses 4 output heads with the same s-hop supervision (single pass). Architecture, data, and optimizer are otherwise identical to pc-r004. Questions: (1) Does z_probe_acc rise at step s for the s-hop target? (2) Does K=4 val accuracy break above chance? (3) Does TRM outperform the multi-task baseline?
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_cycles | 3 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 50 |
+| max_steps | 100,000 |
+| warmup_steps | 1,000 |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | **concat + Linear(Kmax×dim, dim)** — identical to pc-r003/r004 |
+| z-supervision | auxiliary CE on z_aux_head(z) at steps 0–3 vs. s-hop targets (λ=1.0); steps 4–7 unsupervised |
+| baseline | **multi-task** — 4 output heads, single pass, same s-hop supervision |
+| device | cuda |
+| training time | TRM ~12.6 h (45,457.5 s), Baseline ~20.6 min (1,236.9 s) |
+| timestamp | 2026-07-22 01:04:14 |
+
+**Results — eval by required depth K (final step accuracy):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) | vs pc-r004 TRM |
+|---|---|---|---|---|---|
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 | **+0.938** |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | TRM val | Baseline val |
+|---|---|---|
+| 10 | **100.0%** | **100.0%** |
+| 20 | **100.0%** | **100.0%** |
+| 30 | **100.0%** | **100.0%** |
+| 40 | **100.0%** | **100.0%** |
+| 50 | **100.0%** | **100.0%** |
+
+TRM reached 84.5% train accuracy at epoch 4 and 99.7% by epoch 5 — breakthrough by epoch 5. Baseline reached 21.1% at epoch 5 and 99.8% by epoch 6. Both models fully converged well before epoch 10; all validation checkpoints report 100%.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z-decode | z-probe | y-decode |
+|---|---|---|---|---|---|---|---|
+| 0 | 5.634 | 9.390 | — | **1.000** | 0.784 | **1.000** | **1.000** |
+| 1 | 5.636 | 12.532 | 0.040 | **1.000** | 0.943 | **1.000** | **1.000** |
+| 2 | 5.632 | 24.082 | 0.306 | **1.000** | 0.858 | **1.000** | **1.000** |
+| 3 | 5.434 | 32.957 | 0.398 | **1.000** | **1.000** | **1.000** | **1.000** |
+| 4 | 5.361 | 42.138 | 0.976 | **1.000** | **1.000** | **1.000** | **1.000** |
+| 5 | 5.316 | 51.559 | 0.992 | **1.000** | **1.000** | **1.000** | **1.000** |
+| 6 | 5.290 | 61.172 | 0.997 | **1.000** | **1.000** | **1.000** | **1.000** |
+| 7 | 5.275 | 70.944 | 0.998 | **1.000** | **1.000** | **1.000** | **1.000** |
+
+**Key findings:**
+
+1. **Hop-by-hop z-supervision fully solved K=4 — both TRM and multi-task baseline reached 100% val accuracy.** This is a decisive jump from pc-r004 where both models were pinned at chance (6.2–6.4%). Adding intermediate supervision broke the compositional bottleneck entirely. The s-hop auxiliary loss is the causal variable.
+
+2. **halt_prob collapsed to 1.000 at step 0 — the TRM is not using multi-step recursion.** Like pc-r002 and pc-r003 (and unlike pc-r004 where halt was 39.5%), the model halts immediately at step 0. The 100% accuracy is achieved in a single forward pass, not via iterative composition across recursion steps. The recursion mechanism is dormant.
+
+3. **z_probe_acc = 1.000 at step 0 — z already contains the full 4-hop answer before any recursion.** The stop-gradient probe (honest measurement, no interference) achieves perfect accuracy from the very first z state. Combined with halt_prob=1.0, the model learned to embed the complete 4-hop result in z at encoding time rather than building it through recursion.
+
+4. **z_decode_acc progression reveals supervised shaping: 0.784 → 0.943 → 0.858 → 1.000 (steps 0–3).** The z_decode accuracy (the supervised auxiliary head) reaches 1.0 by step 3, confirming supervision successfully forced z to represent the 4-hop target. The dip at step 2 (0.858 vs. 0.943 at step 1) is notable — the 3-hop intermediate is briefly harder to decode before the 4-hop supervision at step 3 pulls accuracy up.
+
+5. **The multi-task baseline matches TRM at 100% — supervision, not recursion, is the unlocking variable.** The single-pass multi-task baseline with the same s-hop supervision achieves identical val accuracy in a fraction of the training time (~20.6 min vs. ~12.6 h). The performance difference between TRM and baseline is zero. The z-supervision gave the model an easy path: represent the final answer in z and halt.
+
+6. **z_cosine drops to 0.040 between steps 0 and 1 — one large z update, then convergence.** The cosine climbs to 0.306 (step 1→2), 0.398 (step 2→3), then rapidly to 0.976, 0.992, 0.997, 0.998 for steps 3–7. The initial z transition is the most meaningful; subsequent steps are essentially stationary, consistent with a model that committed to its answer at step 0.
+
+7. **z_norms are stable (~5.27–5.64) across all steps — no norm instability.** Unlike earlier sudoku runs, z is well-conditioned. y_norms grow linearly (9.4 → 70.9), indicating the output projection accumulates but the latent state itself is steady.
+
+8. **y_decode_acc = 1.000 at all steps, including step 0.** The final output head y is perfect even at step 0, corroborating that the model committed to the correct answer at encoding time.
+
+**Interpretation:**
+
+pc-r005 answers the three experimental questions and opens a deeper one.
+
+- **Q1 answered (z_probe_acc):** z_probe_acc is 1.0 at every step including step 0 — z contains the full 4-hop answer from the outset. The supervision shaped z correctly, but the composition is not built incrementally; it appears in full at step 0.
+- **Q2 answered (K=4 val accuracy):** K=4 val accuracy reached 100% for both models. The hop-by-hop supervision fully unlocks the task.
+- **Q3 answered (TRM vs. baseline):** TRM does not outperform the multi-task baseline at K=4. Both hit 100%. There is no advantage to the recursion mechanism when a single pass suffices.
+- **Confound identified:** Adding s-hop supervision to both models taught them to solve K=4 in a single pass. halt_prob=1.0 means the TRM is exploiting this one-pass solution identically to the baseline. The supervision inadvertently eliminated the need for iterative composition by making the full answer directly supervisable at step 3 — and both models found it.
+- **The core question remains open:** Can the TRM use multi-step recursion where the baseline structurally cannot? The next experiment should prevent the one-pass shortcut — either by withholding the final-step supervision (forcing z to build toward the answer rather than decode it directly), by using a held-out K=8 generalization test, or by architecturally preventing the baseline from matching a multi-step TRM.
+
+**Next experiment:** Generalization to held-out hop depths (K=5, K=6, K=8) using the pc-r005 trained TRM, with no retraining. If the TRM's z already encodes the composition rule rather than the specific K=4 answer, it should generalize; the single-pass baseline cannot. Alternatively: train with K-supervision only at intermediate steps (not the final step), forcing the model to build partial results without a direct final-step target.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_z_state.png)
+- ![Introspection](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_introspection.png)
+- ![Scratchpad](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_scratchpad.png)
+
+---
