@@ -1,0 +1,285 @@
+{
+  "config": {
+    "L": 16,
+    "K_values": [
+      4
+    ],
+    "Kmax": 4,
+    "dim": 256,
+    "n_layers": 2,
+    "n_heads": 8,
+    "n_recursions": 8,
+    "n_cycles": 3,
+    "n_supervision": 8,
+    "batch_size": 64,
+    "lr": 0.0003,
+    "weight_decay": 0.1,
+    "num_epochs": 15,
+    "max_steps": 100000,
+    "warmup_steps": 1000,
+    "num_train": 100000,
+    "num_val": 4000,
+    "seed": 42,
+    "data_seed": 42,
+    "task": "pointer_chase",
+    "run_id": "pc-r007",
+    "arm": "absolute",
+    "aux_mode": "absolute",
+    "precision": "bf16",
+    "gpu": "NVIDIA L4",
+    "torch_version": "2.11.0+cu128",
+    "probe_every_n": 4,
+    "device": "cuda"
+  },
+  "training": {
+    "trm": {
+      "best_val_acc": 1.0,
+      "training_time_sec": 12734.2,
+      "epoch_losses": [
+        3.549101,
+        3.490172,
+        3.149921,
+        2.019296,
+        0.740257,
+        0.711079,
+        0.702888,
+        0.493605,
+        0.352046,
+        0.350224,
+        0.349825,
+        0.34967,
+        0.34956,
+        0.34821,
+        0.346395
+      ],
+      "epoch_accs": [
+        0.062077,
+        0.063076,
+        0.062068,
+        0.436561,
+        0.995424,
+        0.998767,
+        0.999552,
+        0.999768,
+        0.999825,
+        0.999975,
+        0.999988,
+        1.0,
+        0.999994,
+        0.999994,
+        0.999975
+      ],
+      "val_accs": [
+        1.0,
+        1.0
+      ]
+    },
+    "baseline": {
+      "best_val_acc": 1.0,
+      "training_time_sec": 348.9,
+      "epoch_losses": [
+        1.588669,
+        0.69526,
+        0.693646,
+        0.692888,
+        0.691812,
+        0.503414,
+        0.000803,
+        0.000335,
+        9.3e-05,
+        1e-06,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "epoch_accs": [
+        0.062033,
+        0.063858,
+        0.06573,
+        0.069429,
+        0.075089,
+        0.340989,
+        0.999844,
+        0.999937,
+        0.999981,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "val_accs": [
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "eval_by_K": {
+    "trm": {
+      "4": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.088906,
+          "1": 0.999984,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      },
+      "2": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.596906,
+          "1": 0.999984,
+          "2": 0.999984,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      },
+      "3": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.088641,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      }
+    },
+    "baseline": {
+      "4": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.062172,
+          "1": 0.063906,
+          "2": 0.064219,
+          "3": 1.0
+        }
+      },
+      "2": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.06225,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0
+        }
+      },
+      "3": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.0635,
+          "1": 0.063469,
+          "2": 1.0,
+          "3": 1.0
+        }
+      }
+    }
+  },
+  "diagnostics": {
+    "z_norms": [
+      12.93996,
+      12.974636,
+      12.991333,
+      12.991073,
+      12.9894,
+      12.988119,
+      12.98716,
+      12.986421
+    ],
+    "y_norms": [
+      23.316263,
+      38.385887,
+      71.728569,
+      110.126404,
+      149.681519,
+      189.458282,
+      229.229858,
+      268.931641
+    ],
+    "z_cosines": [
+      0.659119,
+      0.458822,
+      0.873279,
+      0.9826,
+      0.995021,
+      0.997895,
+      0.998903
+    ],
+    "halt_probs": [
+      0.09382,
+      0.999678,
+      0.99997,
+      0.999979,
+      0.99998,
+      0.99998,
+      0.99998,
+      0.999979
+    ],
+    "z_taskdecode_acc": [
+      0.012695,
+      0.001953,
+      0.072266,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "z_aux_acc": [
+      1.0,
+      1.0,
+      1.0,
+      0.057617,
+      0.037109,
+      0.024414,
+      0.012695,
+      0.007812
+    ],
+    "z_probe_acc": [
+      1.0,
+      1.0,
+      0.992188,
+      0.99707,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "y_decode_acc": [
+      0.081055,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "aux_entropy_per_step": [
+      3.8e-05,
+      4e-06,
+      0.000477,
+      0.332021,
+      0.715652,
+      0.89602,
+      0.975198,
+      1.010112
+    ]
+  },
+  "notes": "pc-r007: Transition supervision vs absolute supervision (2 arms x 3 seeds, bf16, A100). Architecture/data/optimizer IDENTICAL to pc-r006 (L=16, fixed K=4, 100k train, dim=256, concat encoder, n_recursions=8). Single contrast isolated: supervising STATES (absolute step-indexed s-hop targets, arm='absolute', pc-r006 scheme) vs supervising the OPERATOR (step-0 absolute anchor + step-invariant one-hop-advance transition loss, steps 1-7, arm='transition'). Everything else held fixed across arms and across seeds 42/43/44. bf16 autocast (no GradScaler) replaces pc-r006's fp16+scaler for numerical stability. z_aux_acc added (the metric pc-r006 finding 5 mistakenly thought it had); z_decode_acc renamed z_taskdecode_acc per the pc-r006 errata. Probe now trains at every step against saturated s-hop targets so late-step readouts are honest. Held-out-K eval (K=2,3 downward transfer) added, training K fixed at 4. Fixed data_seed=42 for all train/val/K=2/K=3 dataset construction across all 6 runs (2 arms x 3 seeds); `seed` (42/43/44) governs ONLY model init and minibatch order, so seed variance means exactly one thing (optimization trajectory), not resampled data. Questions: (1) Does z_probe_acc extend past the 2-hop boundary under transition supervision where absolute supervision (pc-r006) stalled? (2) Does val accuracy lift with the train/val gap closing (not just train climbing)? (3) Does halt_prob behavior differ by arm?",
+  "timestamp": "2026-07-23 23:23:27"
+}
