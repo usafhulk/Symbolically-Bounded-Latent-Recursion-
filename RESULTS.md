@@ -2618,3 +2618,102 @@ pc-r005 answers the three experimental questions and opens a deeper one.
 - ![Scratchpad](results/exp-pointer_chase-r005/pointer_chase_20260721_120537_scratchpad.png)
 
 ---
+
+### Run pc-r006 — `exp/pointer_chase/r006` — Intermediate-Only Z-Supervision (L=16, fixed K=4, 50 epochs, num_train=100,000)
+
+**Hypothesis:** pc-r005 solved K=4 at 100% but halt_prob collapsed to 1.0 — the model found a one-pass shortcut enabled by direct 4-hop z-supervision at step 3. Removing that final-step z-supervision (`aux_sup_steps` 4 → 3) closes the shortcut: z is now supervised only against 1-hop, 2-hop, and 3-hop intermediates. The main y_hat CE loss on K=4 is unchanged. If halt_prob drops below 1.0, the model is forced to recurse. If z_probe_acc builds incrementally across steps, the recursion is doing genuine intermediate composition. Architecture, data, and optimizer otherwise identical to pc-r005.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_cycles | 3 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 50 |
+| max_steps | 100,000 |
+| warmup_steps | 1,000 |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | **concat + Linear(Kmax×dim, dim)** — identical to pc-r003–r005 |
+| z-supervision | steps 0–2 only (1-hop, 2-hop, 3-hop); **4-hop withheld from z** (λ=1.0) |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda |
+| training time | TRM ~11.9 h (42,845.9 s), Baseline ~20.2 min (1,212.3 s) |
+| timestamp | 2026-07-23 04:04:58 |
+
+**Results — eval by required depth K (final step accuracy):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) | vs pc-r005 TRM |
+|---|---|---|---|---|---|
+| 4 | 0.062 | **1.000** | −0.938 | 0.0625 | −0.938 |
+
+**Val accuracy curve (every 10 epochs):**
+
+| Epoch | TRM val | Baseline val |
+|---|---|---|
+| 10 | 6.27% | **100.0%** |
+| 20 | 6.07% | **100.0%** |
+| 30 | 6.10% | **100.0%** |
+| 40 | 6.13% | **100.0%** |
+| 50 | 6.22% | **100.0%** |
+
+TRM train accuracy climbs slowly from 6.3% (epoch 1) to 49.5% (epoch 50) — loss still decreasing at epoch 50 (3.55 → 2.07), not converged. Baseline converges to 100% by epoch 17, identical to pc-r005.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z-decode | z-probe | y-decode |
+|---|---|---|---|---|---|---|---|
+| 0 | 4.596 | 22.337 | — | **0.357** | 0.055 | **1.000** ← supervised | 0.063 |
+| 1 | 4.610 | 41.970 | 0.339 | 0.467 | 0.035 | **0.985** ← supervised | 0.059 |
+| 2 | 4.576 | 71.769 | 0.242 | 0.489 | 0.066 | 0.055 ← supervised | 0.054 |
+| 3 | 4.574 | 93.263 | 0.980 | 0.492 | 0.054 | 0.063 | 0.056 |
+| 4 | 4.574 | 112.536 | 0.994 | 0.494 | 0.055 | 0.061 | 0.057 |
+| 5 | 4.575 | 130.787 | 0.997 | 0.496 | 0.058 | 0.060 | 0.058 |
+| 6 | 4.575 | 148.423 | 0.998 | 0.498 | 0.057 | 0.059 | 0.057 |
+| 7 | 4.576 | 165.646 | 0.999 | 0.499 | 0.058 | 0.059 | 0.058 |
+
+**Key findings:**
+
+1. **TRM drops back to chance (6.22%) — the pc-r005 one-pass shortcut is confirmed.** Removing 4-hop z-supervision entirely reversed the TRM's K=4 performance from 100% to chance. The 100% result in pc-r005 was fully attributable to the model learning to front-load the K=4 final answer into z at step 3 and halt immediately. That shortcut is now closed.
+
+2. **Baseline still solves K=4 at 100% — the split is now inverted vs. pc-r005.** The multi-task baseline is unaffected because its head[3] is always directly supervised on the K=4 target. Performance gap is now baseline − TRM = 0.938, in the baseline's favor.
+
+3. **halt_prob dropped from 1.0 to 35.7% at step 0** — the shortcut elimination worked mechanistically. The model now distributes computation across recursion steps rather than halting immediately. halt_prob rises gradually to ~49.9% by step 7, never fully committing to any single step. This is the first run where the TRM is genuinely iterating.
+
+4. **z_probe_acc is 1.000 at step 0 and 0.985 at step 1 — then drops to chance at step 2.** The stop-gradient probe correctly reads the 1-hop composition from z at step 0 and the 2-hop composition at step 1 — the recursion IS doing real intermediate composition for the first two hops. But z at step 2 contains no decodable 3-hop information (0.055 ≈ chance). The composition chain breaks at the 3-hop boundary.
+
+5. **z_decode_acc is at chance throughout — z and z_aux_head are misaligned.** Unlike z_probe_acc, the z_aux_head (which shapes z via gradients) cannot decode z against the partial targets during inference. The probe head found a representation of 1-hop and 2-hop in z that the gradient-coupled z_aux_head did not converge to. This misalignment between the two heads warrants investigation.
+
+6. **z_cosines show real state updates at steps 0→1 (0.339) and 1→2 (0.242), then convergence.** The two lowest cosines correspond exactly to the two steps where z_probe_acc is non-trivial (steps 0 and 1). After step 2→3 the cosine jumps to 0.980 and stays there — z is stationary from step 2 onward, consistent with z_probe_acc at chance for steps 2–7.
+
+7. **TRM train accuracy reaches 49.5% by epoch 50 but val stays at chance.** The model is learning something on the training set well above chance (49.5% vs 6.25%), but this does not generalize. With 100k training samples this is not memorization. The rising training accuracy is likely driven by the 1-hop and 2-hop components (which z does solve) leaking signal into the final y_hat loss, without the 3→4-hop generalization step being learned. The loss is still decreasing at epoch 50 — the model has not converged.
+
+8. **y_decode_acc is at chance at every step (0.054–0.063).** The output head never produces meaningful K=4 predictions at any recursion step, consistent with the complete failure of 3-hop → 4-hop composition.
+
+**Interpretation:**
+
+pc-r006 delivers two clean findings and opens a specific bottleneck for investigation.
+
+- **Shortcut confirmed and closed:** The entire 100% result of pc-r005 was a one-pass shortcut through the final-step z-supervision. Removing it collapses TRM performance to chance and drops halt_prob from 1.0 to 35.7%. The recursion mechanism is now engaged but not solving the task.
+- **1-hop and 2-hop composition works in z (steps 0–1):** z_probe_acc of 1.0 and 0.985 at the first two supervised steps demonstrates that the TRM CAN learn to represent intermediate compositions in z via the recursion. The first two composition steps are genuinely learned. This is the first positive signal for iterative composition across runs.
+- **3-hop is the composition bottleneck:** z_probe_acc drops to chance at step 2 (supervised against 3-hop). The chain 1-hop → 2-hop → 3-hop → 4-hop breaks at the third link. Two likely causes: (a) 50 epochs is insufficient — the training loss was still decreasing at epoch 50 and train accuracy was still climbing; (b) the z_aux_head / z_probe_head misalignment (finding 5) introduces a supervision inconsistency at step 2 that may prevent the 3-hop signal from shaping z.
+- **The decisive next test:** Extend training to 100 epochs. If the 3-hop z_probe_acc rises and TRM val accuracy follows, the bottleneck was simply underfitting. If not, investigate the z_aux / z_probe head misalignment.
+
+**Next experiment:** Extend training to 100 epochs with identical config (pc-r007). The TRM training loss was still decreasing at epoch 50 (2.07, not converged), and train accuracy was climbing (49.5%). If 3-hop composition emerges in z_probe_acc by epoch 100 and val accuracy lifts above chance, the bottleneck is training duration, not architecture.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_z_state.png)
+- ![Introspection](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_introspection.png)
+- ![Scratchpad](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_scratchpad.png)
+
+---
