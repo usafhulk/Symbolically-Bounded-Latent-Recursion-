@@ -1,0 +1,327 @@
+{
+  "config": {
+    "L": 16,
+    "K_values": [
+      4
+    ],
+    "Kmax": 4,
+    "dim": 256,
+    "n_layers": 2,
+    "n_heads": 8,
+    "n_recursions": 8,
+    "n_cycles": 3,
+    "n_supervision": 8,
+    "batch_size": 64,
+    "lr": 0.0003,
+    "weight_decay": 0.1,
+    "num_epochs": 25,
+    "max_steps": 100000,
+    "warmup_steps": 1000,
+    "num_train": 100000,
+    "num_val": 4000,
+    "seed": 42,
+    "data_seed": 42,
+    "task": "pointer_chase",
+    "run_id": "pc-r008",
+    "arm": "absolute",
+    "aux_mode": "absolute",
+    "precision": "bf16",
+    "gpu": "NVIDIA L4",
+    "torch_version": "2.11.0+cu128",
+    "probe_every_n": 4,
+    "device": "cuda"
+  },
+  "training": {
+    "trm": {
+      "best_val_acc": 1.0,
+      "training_time_sec": 20914.7,
+      "epoch_losses": [
+        3.549127,
+        3.466091,
+        2.878704,
+        0.776008,
+        0.713415,
+        0.706627,
+        0.704205,
+        0.702437,
+        0.50293,
+        0.351863,
+        0.350943,
+        0.350207,
+        0.34037,
+        0.327821,
+        0.325502,
+        0.323284,
+        0.321102,
+        0.180739,
+        0.001131,
+        0.000103,
+        1.8e-05,
+        8e-06,
+        2e-06,
+        1e-06,
+        0.0
+      ],
+      "epoch_accs": [
+        0.062201,
+        0.062951,
+        0.099152,
+        0.990471,
+        0.998422,
+        0.999224,
+        0.999546,
+        0.999731,
+        0.999831,
+        0.999919,
+        0.999969,
+        0.999944,
+        0.999937,
+        0.999994,
+        0.999981,
+        0.999987,
+        0.999994,
+        0.999862,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "val_accs": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "baseline": {
+      "best_val_acc": 1.0,
+      "training_time_sec": 571.2,
+      "epoch_losses": [
+        1.588641,
+        0.695289,
+        0.693689,
+        0.692939,
+        0.691851,
+        0.292435,
+        0.00074,
+        0.000443,
+        0.0003,
+        0.000188,
+        8.9e-05,
+        9e-06,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "epoch_accs": [
+        0.062295,
+        0.063934,
+        0.065805,
+        0.069261,
+        0.076648,
+        0.620612,
+        0.999776,
+        0.999862,
+        0.999875,
+        0.999925,
+        0.999956,
+        0.999987,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "val_accs": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "eval_by_K": {
+    "trm": {
+      "4": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 1.0,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      },
+      "2": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 1.0,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      },
+      "3": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 1.0,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0,
+          "4": 1.0,
+          "5": 1.0,
+          "6": 1.0,
+          "7": 1.0
+        }
+      }
+    },
+    "baseline": {
+      "4": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.062172,
+          "1": 0.063906,
+          "2": 0.064219,
+          "3": 1.0
+        }
+      },
+      "2": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.06225,
+          "1": 1.0,
+          "2": 1.0,
+          "3": 1.0
+        }
+      },
+      "3": {
+        "final_acc": 1.0,
+        "step_accs": {
+          "0": 0.0635,
+          "1": 0.063469,
+          "2": 1.0,
+          "3": 1.0
+        }
+      }
+    }
+  },
+  "diagnostics": {
+    "z_norms": [
+      10.283116,
+      10.317492,
+      10.31951,
+      10.26873,
+      10.263791,
+      10.263021,
+      10.263186,
+      10.263561
+    ],
+    "y_norms": [
+      16.088303,
+      27.865112,
+      49.587471,
+      78.394043,
+      108.548553,
+      139.181274,
+      169.976196,
+      200.808884
+    ],
+    "z_cosines": [
+      0.316271,
+      0.345159,
+      0.541065,
+      0.981374,
+      0.995313,
+      0.997999,
+      0.998945
+    ],
+    "halt_probs": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "z_taskdecode_acc": [
+      0.107422,
+      0.105469,
+      0.089844,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "z_aux_acc": [
+      1.0,
+      1.0,
+      1.0,
+      0.128906,
+      0.125,
+      0.120117,
+      0.120117,
+      0.120117
+    ],
+    "z_probe_acc": [
+      1.0,
+      1.0,
+      0.999023,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "y_decode_acc": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "aux_entropy_per_step": [
+      9e-06,
+      3e-06,
+      0.0,
+      0.300088,
+      0.316424,
+      0.338483,
+      0.349043,
+      0.354069
+    ]
+  },
+  "notes": "pc-r008: Compute-starve sweep \u2014 n_recursions in {1,2,4,8} (inner latent-recursion depth per outer supervision step). arm='absolute', seed=42, data_seed=42 held fixed (the pc-r007 absolute/s42 config; R=8 is the pc-r007 anchor). SINGLE variable = n_recursions. Motivation: pc-r007 solved K=4 at 100% with the 4-hop answer appearing in y by outer step 1, but each outer step runs n_recursions=8 inner z-updates (~16 inner transformer applications by step 1) \u2014 ample compute to compute all 4 hops within one/two outer steps rather than one hop per outer step (front-loading). NOTE: n_cycles is inert (stored but never read by TinyRecursiveModel.forward); the true recurrence-depth knob is n_recursions. This corrects pc-r007 finding 7, which mis-attributed the per-step inner compute to n_cycles=3. Test: hold n_supervision=8 and shrink n_recursions. Genuine iteration (outer loop as a hop clock) => the correct K=4 answer still emerges, at a possibly-later outer step; front-loaded shallow compute => final K=4 acc degrades and/or emergence slides past the available steps as R drops. Everything else identical to pc-r007 (bf16, every-step probe, concat encoder, 100k train, dim=256, n_supervision=8). Questions: (1) At which outer step does y first reach 1.0 as R shrinks? (2) Does z_probe_acc still saturate the composition chain under starved compute? (3) Does final K=4 acc hold at R in {1,2,4}?",
+  "timestamp": "2026-07-24 20:35:58"
+}
