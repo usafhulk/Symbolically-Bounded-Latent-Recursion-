@@ -2718,3 +2718,92 @@ pc-r006 delivers two clean findings and opens a specific bottleneck for investig
 - ![Scratchpad](results/exp-pointer_chase-r006/pointer_chase_20260722_155018_scratchpad.png)
 
 ---
+
+### Run pc-r007 (absolute arm, seed 42) — `exp/pointer_chase/r007` — bf16 + Every-Step Probe, Intermediate-Only Z-Supervision (L=16, fixed K=4, 15 epochs)
+
+**Hypothesis:** pc-r007 was designed as a 2-arm × 3-seed contrast — supervising *states* (arm="absolute", the pc-r006 scheme: CE vs s-hop targets at steps 0–2, 4-hop withheld from z) vs supervising the *operator* (arm="transition": step-0 absolute anchor + step-invariant one-hop-advance transition loss at steps 1–7). This entry reports the first completed run: **arm=absolute, seed=42**. Architecture, data, optimizer, and λ identical to pc-r006; engineering changes: bf16 autocast replaces fp16+GradScaler (no scaler step-skipping nondeterminism), the stop-gradient probe now trains at every supervision step against saturated s-hop targets, `z_aux_acc` added (the metric pc-r006 finding 5 mistakenly thought it had), `z_decode_acc` renamed `z_taskdecode_acc` per the pc-r006 errata, and held-out-K downward-transfer eval (K=2, 3) added. Fixed `data_seed=42` for all dataset construction across arms/seeds; `seed` governs only model init and minibatch order.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions | 8 |
+| n_cycles | 3 |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | **15** (vs 50 in pc-r006) |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) — identical to pc-r003–r006 |
+| z-supervision | arm=**absolute** — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0), same as pc-r006 |
+| precision | **bf16 autocast** (pc-r006 was fp16 + GradScaler) |
+| probe | trained at **every** supervision step vs saturated s-hop target (pc-r006: steps 0–2 only) |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda (NVIDIA L4) |
+| training time | TRM ~3.5 h (12,734.2 s), Baseline ~5.8 min (348.9 s) |
+| timestamp | 2026-07-23 23:23:27 |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer, training was K=4 only):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) | vs pc-r006 TRM |
+|---|---|---|---|---|---|
+| 2 | **1.000** | **1.000** | 0.000 | 0.0625 | — (not evaluated in r006) |
+| 3 | **1.000** | **1.000** | 0.000 | 0.0625 | — (not evaluated in r006) |
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 | **+0.938** |
+
+**Training curve (TRM):** chance through epoch 3 (loss 3.55 → 3.15), sharp phase transition at epoch 4 (train acc 43.7%), 99.5% by epoch 5, val 100% at first check (epoch 10) and at epoch 15. Baseline: phase transition at epoch 6–7, 100% val by epoch 10. Both models fully converged.
+
+**Per-step eval accuracy (TRM, K=4):** 0.089 at step 0, then **1.000 from step 1 onward** — the correct K=4 answer appears in y after one additional supervision step and persists. Downward transfer runs through the same trajectory (K=2: 0.597 at step 0, 1.0 from step 1; K=3: 0.089 at step 0, 1.0 from step 1). Baseline per-hop heads read 1.0 exactly at head index K−1, chance below it.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 12.940 | 23.316 | — | 0.094 | 0.013 | **1.000** ← supervised | **1.000** ← supervised | 0.081 |
+| 1 | 12.975 | 38.386 | 0.659 | 1.000 | 0.002 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 2 | 12.991 | 71.729 | 0.459 | 1.000 | 0.072 | **1.000** ← supervised | **0.992** ← supervised | **1.000** |
+| 3 | 12.991 | 110.126 | 0.873 | 1.000 | **1.000** | 0.058 | **0.997** | **1.000** |
+| 4 | 12.989 | 149.682 | 0.983 | 1.000 | **1.000** | 0.037 | **1.000** | **1.000** |
+| 5 | 12.988 | 189.458 | 0.995 | 1.000 | **1.000** | 0.024 | **1.000** | **1.000** |
+| 6 | 12.987 | 229.230 | 0.998 | 1.000 | **1.000** | 0.013 | **1.000** | **1.000** |
+| 7 | 12.986 | 268.932 | 0.999 | 1.000 | **1.000** | 0.008 | **1.000** | **1.000** |
+
+z_aux softmax entropy: ~0 at supervised steps 0–2, rising 0.33 → 1.01 across free steps 3–7 (drifting toward uniform once its supervision ends — expected, not a collapse signal for this arm).
+
+**Key findings:**
+
+1. **TRM solves K=4 at 100% with the 4-hop z-supervision still withheld — pc-r006's chance-level result is reversed by engineering changes alone.** The supervision scheme (absolute, steps 0–2 only) is *identical* to pc-r006. What changed: bf16 replaces fp16+GradScaler, the probe trains at every step, 15 epochs instead of 50, and an L4 with the same architecture. pc-r006's failure was therefore **not** a compositional-generalization ceiling — the most likely culprit is fp16+GradScaler numerical instability (scaler step-skipping) suppressing the phase transition that here occurs at epoch 4. pc-r006's "3-hop bottleneck" interpretation is superseded.
+
+2. **The composition chain now completes in z: z_probe_acc ≥ 0.992 at every step, including the unsupervised steps 3–7.** The stop-gradient probe reads the saturated s-hop composition (4-hop from step 3 onward) out of z at ~100% even though z was never directly supervised on the 4-hop target. This is the probe-verified 3-hop → 4-hop composition pc-r006 could not find — the one-hop ceiling standing since pc-r003 is broken. (Caveat: the probe is now *trained* at steps 3–7 vs the saturated target, so it is an honest readout of whether the information is present in z, not evidence that z was shaped by 4-hop gradients — those still don't exist.)
+
+3. **z_taskdecode_acc flips from chance to 1.000 at exactly step 3 — z enters y-decodable space precisely when the composition saturates.** Steps 0–2 (partial compositions): chance, as the pc-r006 errata predicted. Steps 3–7: the task-output decoder reads the final answer directly from z. The latent state carries the completed 4-hop answer in output coordinates once — and only once — the recursion has composed it.
+
+4. **z_aux_acc confirms the head does its job at supervised steps (1.000 at steps 0–2), then decays at free steps** (0.058 → 0.008) as its logits drift toward uniform (entropy → 1.0). This is the metric pc-r006 finding 5 thought it was reporting; there is no head misalignment.
+
+5. **halt_prob: 0.094 at step 0, then 1.0 from step 1 — the model "knows when it's done" and it coincides with the answer appearing in y.** Mean halt step 4.95. Unlike pc-r005's degenerate halt-at-step-0-with-shortcut, here halting locks in only after a step of genuine recursion, and the per-step eval confirms the answer is actually correct from step 1.
+
+6. **Perfect downward depth transfer (K=2, 3 at 100%) without ever training on those depths.** The trained-on-K=4 TRM generalizes to shallower chains through the same recursion, supporting a genuinely compositional internal procedure rather than a K=4-specific lookup.
+
+7. **One caveat on the eval step-1 jump: the correct K=4 answer appears after only two supervision steps (0→1), not four.** With n_cycles=3 micro-recursions per supervision step, the network has ≥6 internal recurrent applications by step 1 — enough compute for 4 hops. The composition is real (probe-verified in z, transfers downward) but it is packed into fewer outer steps than the hop count, so the outer supervision steps are not a 1:1 hop clock.
+
+8. **TRM is ~36× slower to train than the baseline (12,734 s vs 349 s)** for the same 100% result on this task — the baseline's per-hop heads solve fixed-K pointer chasing trivially. The TRM's value claim rests on the transfer/compositional properties (finding 6), which the per-hop-supervised baseline also partially shares (its head k reads hop k+1 perfectly). The transition arm and seeds 43/44 will show whether the result is robust and whether operator supervision changes the picture.
+
+**Interpretation:**
+
+pc-r007's first arm delivers the strongest positive result of the pointer-chasing series: with final-answer z-supervision still withheld, the TRM composes 1→2→3→4 hops in latent space (probe-verified at every step), reads the completed composition out through the task head from step 3 onward, halts decisively once the answer is locked in, and transfers perfectly to unseen shallower depths. The pc-r006 "composition breaks at 3-hop" conclusion is superseded — that failure now looks like an fp16/GradScaler training-stability artifact, not an architectural limit. The single-run caveats: one seed, one arm, and the model compresses 4 hops into ~2 outer supervision steps, so outer-step semantics are looser than the s-hop supervision scheme implies.
+
+**Next experiment:** Complete the pc-r007 matrix — transition arm (operator supervision) and seeds 43/44 for both arms — to (1) test robustness of the absolute-arm result across seeds, (2) test whether step-invariant transition supervision also (or better) drives composition, and (3) compare halt behavior and z-trajectory structure between state- and operator-supervised recursions.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_scratchpad.png)
+
+---
