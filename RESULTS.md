@@ -2895,3 +2895,84 @@ The anchor point converts pc-r007's caveat into a baseline fact: at R=8, all fou
 - ![Scratchpad](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_scratchpad.png)
 
 ---
+
+### Run pc-r009 (R=4) — `exp/pointer_chase/r009` — n_recursions=4, absolute arm, seed 42, 25 epochs
+
+**Hypothesis:** Second point of the compute-starve sweep (sweep now 2 of 4 points complete; R=2 and R=1 pending). Halve the anchor's inner recursion budget to R=4 — exactly one inner z-update per hop. If the outer supervision loop is a genuine hop clock, the K=4 answer should now need more outer steps to emerge; if the recursion front-loads, R=4 still suffices to complete all four hops within outer step 0 and the step-0 answer should persist.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| **n_recursions (R)** | **4** (anchor: 8) |
+| n_cycles | 3 (inert — never read by forward) |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 25 |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) — unchanged |
+| z-supervision | arm=absolute — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0) |
+| precision | bf16 autocast |
+| probe | trained at every supervision step vs saturated s-hop target |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda (NVIDIA L4), torch 2.11.0+cu128 |
+| training time | TRM ~3.3 h (11,963.7 s — 57% of the R=8 anchor's 20,914.7 s), Baseline ~9.7 min (583.6 s) |
+| timestamp | 2026-07-27 18:34:52 (saved 22:04:30) |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 2 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 3 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 |
+
+**Training curve (TRM):** near-identical to the R=8 anchor — chance through epoch 2, transition already visible at epoch 3 (train acc 28.2%, vs 9.9% at R=8), 98.8% at epoch 4, second loss regime-drop at epochs 13–14 (0.22 → 0.0015 → ~0), val 100% at every check. Baseline: transition at epoch 6, val 100% by epoch 10 — indistinguishable from its R=8 counterpart (R does not apply to the baseline).
+
+**Per-step eval accuracy (TRM):** **1.000 at every outer step for every K, including step 0** — same as the R=8 anchor. Halving the inner budget did not move the emergence step.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 10.109 | 18.933 | — | 1.000 | 0.056 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 1 | 10.145 | 33.091 | 0.642 | 1.000 | 0.058 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 2 | 10.151 | 51.437 | 0.556 | 1.000 | 0.072 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 3 | 10.118 | 74.404 | 0.850 | 1.000 | **1.000** | 0.066 | **1.000** | **1.000** |
+| 4 | 10.114 | 98.928 | 0.980 | 1.000 | **1.000** | 0.031 | **1.000** | **1.000** |
+| 5 | 10.114 | 124.358 | 0.994 | 1.000 | **1.000** | 0.020 | **1.000** | **1.000** |
+| 6 | 10.114 | 150.428 | 0.997 | 1.000 | **1.000** | 0.015 | **1.000** | **1.000** |
+| 7 | 10.114 | 176.987 | 0.999 | 1.000 | **1.000** | 0.009 | **1.000** | **1.000** |
+
+z_aux softmax entropy: 0 at supervised steps 0–2, rising 0.28 → 0.88 across free steps 3–7 (stronger free-step drift than the R=8 anchor's 0.30 → 0.35, closer to pc-r007's 0.33 → 1.01).
+
+**Key findings:**
+
+1. **R=4 replicates the R=8 anchor exactly on every headline metric: 100% at K=2/3/4, answer in y at outer step 0, halt_prob 1.0 everywhere, z_probe 1.000 at all steps.** Halving the per-step inner compute changed nothing observable in the converged model except training wall-clock (~57% of the anchor's).
+
+2. **R=4 is precisely the front-loading boundary — four inner z-updates fit four hops inside outer step 0, and the model uses them.** The step-0 answer shows the recursion still packs the whole composition into the first outer step when the inner budget exactly matches the hop count. This point therefore cannot yet discriminate front-loading from iteration; it establishes that the anchor's behavior is not an artifact of surplus compute (R=8 vs the minimal R=4 make no difference). The discriminating points are R=2 and R=1, where 4 hops *cannot* fit in one outer step's inner budget.
+
+3. **The internal step-3 structure is R-invariant so far: z_taskdecode flips chance → 1.000 at exactly step 3 at both R=8 and R=4** (and in pc-r007). Whatever schedules z's entry into y-decodable output coordinates, it tracks the absolute-arm supervision boundary (steps 0–2 supervised), not the inner compute budget.
+
+4. **Slightly earlier phase transition at lower R** (epoch-3 train acc 28.2% vs 9.9% at R=8), and the post-supervision z_aux head decays further toward uniform (entropy 0.88 vs 0.35). Both consistent with a smaller effective unroll being marginally easier to optimize; neither affects final accuracy.
+
+**Interpretation:**
+
+The R=4 point removes "surplus compute" as an explanation for the anchor's step-0 front-loading: even at the minimal budget that can still fit K hops in one outer step, the model front-loads. The sweep's logic now concentrates entirely on R=2 and R=1 — at R=2 the composition needs at least two outer steps (≥2 hops per step impossible in one), and at R=1 a genuinely iterative solution must spread across ≥4 outer steps (answer at step ≥3) while a fixed-depth shortcut should degrade. Emergence step and final K=4 accuracy at those points are the discriminating observables.
+
+**Next experiment:** R=2 (→ next auto-incremented run) and R=1, same config, changing only `n_recursions`. Then the arm/seed matrix (transition arm; seeds 43/44) remains queued.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_scratchpad.png)
+
+---
