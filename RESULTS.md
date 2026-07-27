@@ -2807,3 +2807,91 @@ pc-r007's first arm delivers the strongest positive result of the pointer-chasin
 - ![Scratchpad](results/exp-pointer_chase-r007/pc-r007_absolute_s42_20260723_194439_scratchpad.png)
 
 ---
+## pc-r008 Compute-Starve Sweep — n_recursions (2026-07-24, in progress)
+
+pc-r007 finding 7 raised the front-loading question: the K=4 answer appeared in y by outer step 1, but each outer supervision step runs `n_recursions=8` inner z-updates — ample compute to pack all four hops into one or two outer steps instead of iterating one hop per outer step. pc-r008 isolates a single variable — `n_recursions` (R) ∈ {1, 2, 4, 8} — holding the pc-r007 absolute/seed-42 configuration fixed (`n_supervision=8`, data_seed=42, bf16, every-step probe). Genuine iteration → the answer still emerges (possibly at a later outer step) as R drops; front-loading → final K=4 accuracy degrades once per-step compute can no longer fit 4 hops. The sweep also confirmed (and the notebook now documents) that `n_cycles` is inert — stored on the model but never read by `TinyRecursiveModel.forward` — so R is the sole recurrence-depth knob (see pc-r007 finding 7 errata).
+
+**Sweep status: 1 of 4 points complete (R=8 anchor). R ∈ {1, 2, 4} pending.**
+
+### Run pc-r008 (R=8 anchor) — `exp/pointer_chase/r008` — n_recursions=8, absolute arm, seed 42, 25 epochs
+
+**Hypothesis:** Re-establish the pc-r007 absolute/s42 anchor under the pc-r008 protocol (25 epochs vs 15) before starving R. Expected to reproduce pc-r007's 100% K=4 result; any drift in *when* the answer appears across outer steps is itself informative for the front-loading question.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| **n_recursions (R)** | **8** — sweep anchor (pc-r007 value) |
+| n_cycles | 3 (inert — never read by forward) |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | **25** (vs 15 in pc-r007) |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) — identical to pc-r003–r007 |
+| z-supervision | arm=absolute — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0) |
+| precision | bf16 autocast |
+| probe | trained at every supervision step vs saturated s-hop target |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda (NVIDIA L4), torch 2.11.0+cu128 |
+| training time | TRM ~5.8 h (20,914.7 s), Baseline ~9.5 min (571.2 s) |
+| timestamp | 2026-07-24 14:37:08 (saved 20:35:58) |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 2 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 3 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 |
+
+**Training curve (TRM):** chance through epoch 3 (loss 3.55 → 2.88), phase transition at epoch 4 (train acc 99.0%) — same epoch as pc-r007. A second loss regime-drop at epochs 18–19 (0.18 → 0.001 → ~0) drives the aux/probe residuals to zero. Val 100% at every check (epochs 5/15/25). Baseline: phase transition at epoch 6, val 100% by epoch 10.
+
+**Per-step eval accuracy (TRM):** **1.000 at every outer step for every K, including step 0.** With 10 extra epochs over pc-r007, the correct K=4 answer no longer appears at step 1 — it is already in y at step 0. Baseline per-hop heads unchanged: 1.0 exactly at head index K−1, chance below it.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 10.283 | 16.088 | — | 1.000 | 0.107 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 1 | 10.317 | 27.865 | 0.316 | 1.000 | 0.105 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 2 | 10.320 | 49.587 | 0.345 | 1.000 | 0.090 | **1.000** ← supervised | **0.999** ← supervised | **1.000** |
+| 3 | 10.269 | 78.394 | 0.541 | 1.000 | **1.000** | 0.129 | **1.000** | **1.000** |
+| 4 | 10.264 | 108.549 | 0.981 | 1.000 | **1.000** | 0.125 | **1.000** | **1.000** |
+| 5 | 10.263 | 139.181 | 0.995 | 1.000 | **1.000** | 0.120 | **1.000** | **1.000** |
+| 6 | 10.263 | 169.976 | 0.998 | 1.000 | **1.000** | 0.120 | **1.000** | **1.000** |
+| 7 | 10.264 | 200.809 | 0.999 | 1.000 | **1.000** | 0.120 | **1.000** | **1.000** |
+
+z_aux softmax entropy: ~0 at supervised steps 0–2, rising only to 0.30–0.35 at free steps 3–7 (milder drift than pc-r007's 0.33 → 1.01). Mean halt step 4.50.
+
+**Key findings:**
+
+1. **The R=8 anchor reproduces pc-r007's 100% result — and sharpens the front-loading concern before the sweep even starves compute.** With 25 epochs, the correct K=4 answer is in y at **outer step 0** (pc-r007: step 1). Eight inner z-updates within a single outer step are sufficient to compose all four hops. At R=8, the outer supervision loop is demonstrably *not* acting as a hop clock — the entire composition fits inside one outer step's inner recursion budget.
+
+2. **y and z tell different stories at step 0: y-decode is 1.000 while z_taskdecode is chance (0.107) through step 2.** The final answer reaches y through the y-update pathway immediately, while z itself remains in s-hop supervision coordinates (z_aux = 1.000 at steps 0–2) and only enters y-decodable space at step 3 — the same step-3 flip as pc-r007. The absolute-arm z-supervision successfully pins z to the partial-composition schedule even as the answer bypasses it into y.
+
+3. **z_probe_acc ≥ 0.999 at every step** — the saturated s-hop composition remains linearly readable from z throughout, unsupervised steps included, replicating pc-r007 finding 2.
+
+4. **halt_prob is 1.0 at all steps including step 0** (pc-r007: 0.094 at step 0, 1.0 after). With the answer already present at step 0, the halting head correctly reports "done" immediately — consistent with, and further evidence for, front-loaded composition at R=8.
+
+5. **Longer training deepened convergence without changing the picture:** the epoch-4 phase transition matches pc-r007; the additional epochs push train loss to ~0 (second drop at epochs 18–19) and tighten free-step aux entropy (0.35 vs 1.01). TRM remains ~37× slower than the baseline (20,915 s vs 571 s) for the same 100%.
+
+**Interpretation:**
+
+The anchor point converts pc-r007's caveat into a baseline fact: at R=8, all four hops complete within the first outer step, so outer steps carry no hop-clock semantics at full compute. This makes the pending starved points R ∈ {1, 2, 4} the discriminating data — R=1 gives only one inner z-update per outer step, so a genuinely iterative solution *must* spread hops across outer steps (answer emerging at outer step ≥ 3), whereas a front-loaded fixed-depth circuit should degrade or fail to fit 4 hops. The three open questions from the run notes stand: (1) at which outer step does y first reach 1.0 as R shrinks, (2) does z_probe still saturate the composition chain under starved compute, (3) does final K=4 accuracy hold at R ∈ {1, 2, 4}.
+
+**Next experiment:** Run the remaining sweep points R ∈ {1, 2, 4} (via `PC_NREC` or the `PC_SWEEP=1` driver cell) and compare emergence step, z_probe saturation, and final K=4 accuracy across R. The pc-r007 matrix completion (transition arm, seeds 43/44) remains queued behind the sweep.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r008/pc-r008_absolute_s42_nrec8_20260724_143708_scratchpad.png)
+
+---
