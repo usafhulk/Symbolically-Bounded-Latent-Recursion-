@@ -3150,3 +3150,95 @@ The compute-starve sweep (R = 8, 4, 2, 1) returns an unambiguous answer to the q
 > Write this up as its own artifact (paper section, blog post, or standalone doc) before the follow-on experiments bury the thread.
 
 ---
+
+## Sequential Map Revelation — pc-r012 (2026-07-28)
+
+The compute-starve sweep (pc-r008–r011) established that the TRM solves L=16/K=4 pointer-chasing with a shallow parallel-composition circuit — possible only because the concat encoder exposes all four maps at once. pc-r012 removes that possibility and forces iteration by construction: with `reveal_mode="current"`, the encoder input at outer supervision step *s* contains **only map *s*** — all other hop slots are replaced by a learned mask token (hop tags retained; steps ≥ Kmax all-masked = "hold"). The only route to the K-hop answer is carrying partial composition in z across outer steps and applying one new map per step. The outer loop becomes a genuine information clock; the multi-task baseline keeps full visibility as the parallel-composition control.
+
+### Run pc-r012 — `exp/pointer_chase/r012` — Sequential Revelation (reveal_mode=current, R=4, absolute arm, seed 42, 50 epochs)
+
+**Hypothesis:** Genuine iteration → y first correct at outer step K−1 (step 3 for K=4), z_probe tracks the partial chain, halt locks at step 3, final K=4 accuracy holds. Failure → accuracy degrades or never converges — the first evidence-backed case that the architecture cannot exploit its recursion even when the task demands it.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| n_recursions (R) | 4 |
+| n_cycles | 3 (inert — never read by forward) |
+| n_supervision | 8 |
+| **reveal_mode** | **current** — only map *s* visible at outer step *s*; steps ≥ 4 all-masked ("hold") |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | **50** (raised from 25 — negative result must be unambiguous) |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) + learned mask token for hidden slots |
+| z-supervision | arm=absolute — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0) — now aligned with revelation (z target at step s = composition of exactly the maps revealed so far) |
+| precision | bf16 autocast |
+| probe | trained at every supervision step vs saturated s-hop target |
+| baseline | multi-task — 4 output heads, single pass, **full map visibility** (parallel control) |
+| device | cuda (NVIDIA L4), torch 2.11.0+cu128 |
+| training time | TRM ~6.8 h (24,616.3 s), Baseline ~18.9 min (1,134.9 s) |
+| timestamp | 2026-07-28 13:03:48 (saved 20:13:35) |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 2 | **0.062** | **1.000** | −0.938 | 0.0625 |
+| 3 | **0.063** | **1.000** | −0.937 | 0.0625 |
+| 4 | **0.063** | **1.000** | −0.937 | 0.0625 |
+
+**TRM is at chance at every K and every outer step (all 8 steps: 0.062–0.064).** The full-visibility baseline is untouched by the revelation change (it never had it): 100% at all K, phase transition at epoch 6.
+
+**Training curve (TRM):** no phase transition in 50 epochs — the defining feature of every prior pointer-chase success is absent. Loss creeps 3.53 → 3.18 (chance CE = ln 16 ≈ 2.77 per position... loss includes aux/halt terms); train accuracy crawls monotonically to only 22.0% at epoch 50 while val accuracy stays pinned at chance (best 0.0635) at every check — the slow train-set gain is memorization, not procedure learning. Best-val checkpointing never fires meaningfully.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 6.125 | 17.859 | — | 0.186 | 0.065 | **1.000** ← supervised | 0.000 | 0.055 |
+| 1 | 6.161 | 27.677 | 0.200 | 0.215 | 0.065 | 0.079 ← supervised | 0.051 | 0.056 |
+| 2 | 6.161 | 40.636 | 0.966 | 0.218 | 0.060 | 0.078 ← supervised | 0.063 | 0.056 |
+| 3 | 6.155 | 54.185 | 0.982 | 0.218 | 0.055 | 0.048 | 0.070 | 0.058 |
+| 4 | 6.158 | 67.968 | 0.994 | 0.219 | 0.064 | 0.065 | 0.066 | 0.061 |
+| 5 | 6.160 | 81.865 | 0.999 | 0.219 | 0.064 | 0.062 | 0.065 | 0.062 |
+| 6 | 6.161 | 95.834 | 0.999 | 0.220 | 0.064 | 0.063 | 0.065 | 0.062 |
+| 7 | 6.162 | 109.855 | 0.999 | 0.221 | 0.065 | 0.061 | 0.072 | 0.062 |
+
+z_aux softmax entropy: 0.055 at step 0, then **2.76–2.77 (= ln 16, exactly uniform) at every subsequent step**.
+
+**Key findings:**
+
+1. **Forced to iterate, the TRM cannot: chance at every K, every step, after 50 epochs and ~6.8 h.** This is the run the whole sweep pointed at, and it returns the sharp negative. With the parallel shortcut removed, no amount of the architecture's recursion produces even 2-hop composition.
+
+2. **The failure is precisely localized at the first composition step.** z_aux_acc is 1.000 at step 0 — the model perfectly encodes the 1-hop state from the map it just saw (an encoder lookup, no composition). At step 1, where it must *compose* (apply map 1 to the stored 1-hop state), z_aux collapses to chance with exactly-uniform logits (entropy = ln 16). The "apply new map to carried state" operator was never learned — not weakly, not partially.
+
+3. **The recursion freezes after step 1: z cosine ≈ 0.97–0.999 from step 2 onward** — z stops moving and the network settles into a fixed point carrying no usable state. The z norm (6.16 vs ~10.3 in all prior runs) suggests z never even reaches its usual operating regime.
+
+4. **The halt head is honest: halt_prob ~0.19–0.22 at every step** — in every successful prior run it slammed to 1.0. The model correctly signals that it never has the answer. Deep supervision's unsatisfiable early targets did not corrupt the halt signal.
+
+5. **The full-visibility baseline's clean 100% doubles as an infrastructure control:** data, targets, s-hop supervision, and eval machinery are all intact — the only failing path is the one that requires cross-step iteration.
+
+6. **z_probe at step 0 reads 0.000 (not chance)** — the stop-gradient probe, trained against the saturated s-hop target across a z-distribution that is nearly identical at every step (frozen z), converges to something systematically wrong at step 0's slightly-different z. A diagnostic curiosity, not a mechanism claim.
+
+**Caveats:** single seed, single arm, one revelation schedule (strict "current"); lr/warmup schedule inherited from the easy regime; dim=256 z-capacity untested at larger sizes; the "cumulative" mode (gentler — maps 0..s visible) was implemented but not run; train-acc was still creeping at epoch 50, but flat val across all 5 checks makes "more epochs" an unpromising rescue.
+
+**Interpretation:**
+
+pc-r012 converts the sweep's mechanism finding into an architectural verdict: **the TRM's recursion, as currently built, is not merely unused when a parallel shortcut exists (r008–r011) — it is unusable when the task demands genuine iteration.** The z-feedback loop can hold a state (step-0 1-hop encoding is perfect) but cannot learn the elementary recurrent operation of updating that state with new input, even with supervision explicitly teaching it (s-hop targets at steps 0–2 exactly match the revealed-map prefix). Every positive result in the pointer-chasing series is now attributable to single-pass parallel composition; the recursive scaffolding has contributed no sequential computation anywhere. This is the first evidence-backed case for an architecture change — the question is no longer *whether* the recurrence works, but *what specifically* prevents state-update learning (candidates: y/z pathway asymmetry — new input x enters z's update additively alongside a dominant frozen z fixed point; the z_norm_layer restabilizing to the same attractor each step; no gating/writing mechanism for merging new input into carried state; BPTT signal vanishing across the outer loop).
+
+**Next experiment (candidates, in order):** (1) *Diagnose before redesigning* — rerun with `reveal_mode="cumulative"` (maps 0..s visible): if the model recovers by re-composing revealed prefixes in parallel each step, the failure is specifically in state *carrying*, not input integration. (2) Curriculum probe — train strict revelation on K=2 only (one composition step): isolates whether even a single carried-state update is learnable. (3) Architecture interventions, smallest first: gated z-update (GRU-style merge of new input into z), removing/replacing z_norm_layer in the revelation regime, or an explicit read/write scratchpad slot. (4) Seeds/arm replication of the negative before investing in (3).
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r012/pc-r012_absolute_s42_nrec4_rev-current_20260728_130348_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r012/pc-r012_absolute_s42_nrec4_rev-current_20260728_130348_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r012/pc-r012_absolute_s42_nrec4_rev-current_20260728_130348_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r012/pc-r012_absolute_s42_nrec4_rev-current_20260728_130348_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r012/pc-r012_absolute_s42_nrec4_rev-current_20260728_130348_scratchpad.png)
+
+---
