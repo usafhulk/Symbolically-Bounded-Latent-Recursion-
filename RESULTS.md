@@ -3059,3 +3059,86 @@ R=2 breaks the sweep's intended dichotomy: accuracy neither degraded (ruling out
 - ![Scratchpad](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_scratchpad.png)
 
 ---
+
+### Run pc-r011 (R=1) — `exp/pointer_chase/r011` — n_recursions=1, absolute arm, seed 42, 25 epochs
+
+**Hypothesis:** Final and sharpest point of the compute-starve sweep (sweep complete with this run). One inner z-update per outer step — a single pass through the 2-layer transformer. If even R=1 solves K=4 with the answer at outer step 0, all composition happens within one forward pass and the latent recursion reduces, on this task, to a trained fixed-depth circuit plus a supervision schedule.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| **n_recursions (R)** | **1** (sweep: 8 → 4 → 2 → 1) |
+| n_cycles | 3 (inert — never read by forward) |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 25 |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) — unchanged |
+| z-supervision | arm=absolute — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0) |
+| precision | bf16 autocast |
+| probe | trained at every supervision step vs saturated s-hop target |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda (NVIDIA L4), torch 2.11.0+cu128 |
+| training time | TRM ~1.5 h (5,293.1 s — 25% of R=8), Baseline ~9.7 min (582.0 s) |
+| timestamp | 2026-07-28 10:59:15 (saved 12:37:36) |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 2 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 3 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 |
+
+**Training curve (TRM):** the only sweep point where optimization visibly felt the squeeze — chance through epoch 5 (vs epoch 3 at R≥2), phase transition at epoch 6 (train acc 86.5%), 99.97% by epoch 7, second loss regime-drop at epochs 14–15 (0.31 → 0.0011 → ~0), val 100% at every check. Baseline unchanged.
+
+**Per-step eval accuracy (TRM):** **1.000 at every outer step for every K, including step 0** — fourth sweep point in a row. At R=1, "step 0" is one inner z-update: a single pass through the 2-layer transformer plus the y-update. The complete 4-hop composition is present in y after that single pass.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 10.351 | 16.164 | — | 1.000 | 0.085 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 1 | 10.404 | 40.839 | 0.329 | 1.000 | 0.057 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 2 | 10.365 | 69.412 | 0.594 | 1.000 | 0.072 | **1.000** ← supervised | **0.975** ← supervised | **1.000** |
+| 3 | 10.353 | 101.674 | 0.935 | 1.000 | **1.000** | 0.072 | **0.974** | **1.000** |
+| 4 | 10.346 | 136.900 | 0.981 | 1.000 | **1.000** | 0.072 | **1.000** | **1.000** |
+| 5 | 10.343 | 173.302 | 0.994 | 1.000 | **1.000** | 0.060 | **1.000** | **1.000** |
+| 6 | 10.342 | 210.051 | 0.998 | 1.000 | **1.000** | 0.081 | **1.000** | **1.000** |
+| 7 | 10.341 | 246.828 | 0.999 | 1.000 | **1.000** | 0.085 | **1.000** | **1.000** |
+
+z_aux softmax entropy: 0 through step 3, rising slowly to 0.27 by step 7 — same flat profile as R=2.
+
+**Key findings:**
+
+1. **R=1 completes the sweep with the maximal negative result for iteration: 100% at K=2/3/4, answer in y at outer step 0, at every single sweep point.** A single inner z-update — 2 transformer layers — composes all four hops. The outer supervision loop performs no run-time composition at any tested R; final K=4 accuracy is R-invariant across an 8× compute range.
+
+2. **The composition is not even "2 layers = 2 pairwise-composition rounds" tight — it fits in whatever one pass provides.** With L=16 and all four maps visible to attention simultaneously (concat encoder), a 2-layer, 8-head attention stack suffices to resolve perm₄(perm₃(perm₂(perm₁(i)))) for all 16 positions in one shot. Parallel associative composition (pairing maps within a layer) is the natural mechanism and is consistent with 2 layers handling 4 maps.
+
+3. **The compute squeeze showed up only in optimization, not in the solution: phase transition delayed from epoch 3–4 (R≥2) to epoch 6.** Less inner recurrence = a harder circuit to find, not a weaker circuit once found.
+
+4. **The supervision-boundary signatures deepen monotonically as R shrinks but never break: z_probe at steps 2–3 goes 1.000/1.000 (R=4) → 0.983/0.988 (R=2) → 0.975/0.974 (R=1)**, while the step-3 z_taskdecode flip (chance → 1.000) appears at exactly step 3 for the fifth consecutive run. The flip is fully explained as a training-scheme artifact: z holds s-hop supervision coordinates while supervised (steps 0–2), then relaxes into y-decodable output coordinates — irrespective of R, and long after y already contains the answer.
+
+5. **Training wall-clock is the sweep's only true dependent variable: 20,915 s → 11,964 s → 7,574 s → 5,293 s (R=8→1), ~4× saving at identical converged behavior.** For this task family at this scale, inner recursion depth is pure overhead at inference and mostly overhead at training.
+
+**Interpretation — sweep verdict:**
+
+The compute-starve sweep (R = 8, 4, 2, 1) returns an unambiguous answer to the question pc-r007 posed: the TRM's pointer-chasing solution is a **shallow parallel-composition circuit, not an iterative hop-per-step procedure**. All four hops are composed inside a single 2-layer forward pass; the outer recursion contributes nothing at run time (answer at step 0, halt at step 0, all diagnostics R-invariant), and the inner recursion depth only modulates how easily SGD finds the circuit. What the recursive scaffolding *did* do — per the absolute-arm supervision — is shape z into s-hop coordinates during supervised steps and hand the probe a perfectly composed chain at every step; but that structure is imposed by the loss schedule, not exploited for computation. The positive pc-r007 claims that survive: perfect downward depth transfer and probe-verified composition in z. The claim that does not: that the outer supervision steps function as reasoning steps. On L=16/K=4 pointer-chasing, recursion is unnecessary — the task is too parallelizable (all maps visible at once) to force iteration.
+
+**Next experiment:** the recursion-forcing direction — make single-pass parallel composition impossible or unprofitable: scale K well past what fixed depth can absorb (K=8–16 with Kmax-wide encoder), or hide maps so only one hop is resolvable per step (sequential map revelation), or train across mixed K with upward-OOD eval (K > K_train). Alternatively, complete the deferred pc-r007 matrix (transition arm; seeds 43/44) under the new interpretation.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_scratchpad.png)
+
+---
