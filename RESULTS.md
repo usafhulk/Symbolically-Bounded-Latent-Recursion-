@@ -3142,3 +3142,11 @@ The compute-starve sweep (R = 8, 4, 2, 1) returns an unambiguous answer to the q
 - ![Scratchpad](results/exp-pointer_chase-r011/pc-r011_absolute_s42_nrec1_20260728_105915_scratchpad.png)
 
 ---
+
+> ## 📌 MARKED — COME BACK TO THIS (writeup opportunity)
+>
+> **The compute-starve arc is a self-contained, publishable/documentable negative-result story with an unusually tight diagnostic chain:**
+> pc-r006 (apparent 3-hop composition ceiling) → pc-r007 (ceiling exposed as an fp16/GradScaler artifact; 100% result but with a front-loading caveat) → pc-r008–r011 (single-variable R sweep isolates the mechanism: **shallow parallel-composition circuit, not iterative latent recursion** — answer at outer step 0 at every R ∈ {8,4,2,1}, supervision-boundary signatures R-invariant, wall-clock the only dependent variable).
+> Write this up as its own artifact (paper section, blog post, or standalone doc) before the follow-on experiments bury the thread.
+
+---
