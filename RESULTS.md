@@ -2976,3 +2976,86 @@ The R=4 point removes "surplus compute" as an explanation for the anchor's step-
 - ![Scratchpad](results/exp-pointer_chase-r009/pc-r009_absolute_s42_nrec4_20260727_183452_scratchpad.png)
 
 ---
+
+### Run pc-r010 (R=2) — `exp/pointer_chase/r010` — n_recursions=2, absolute arm, seed 42, 25 epochs
+
+**Hypothesis:** First *discriminating* point of the compute-starve sweep (3 of 4 points complete; R=1 pending). Two inner z-updates per outer step cannot — under the one-hop-per-inner-update assumption — compose four hops within outer step 0. Genuine iteration → the answer emerges at outer step ≥ 1 and final K=4 accuracy holds; front-loaded shallow compute → accuracy degrades or emergence slides past the available steps.
+
+| Parameter | Value |
+|---|---|
+| L | 16 |
+| K_values | [4] — fixed single depth (training) |
+| Kmax | 4 |
+| dim | 256 |
+| n_layers | 2 |
+| n_heads | 8 |
+| **n_recursions (R)** | **2** (anchor: 8; prior point: 4) |
+| n_cycles | 3 (inert — never read by forward) |
+| n_supervision | 8 |
+| batch_size | 64 |
+| lr | 3e-4 |
+| weight_decay | 0.1 |
+| num_epochs | 25 |
+| num_train / num_val | 100,000 / 4,000 |
+| encoder | concat + Linear(Kmax×dim, dim) — unchanged |
+| z-supervision | arm=absolute — steps 0–2 only (1/2/3-hop); 4-hop withheld from z (λ=1.0) |
+| precision | bf16 autocast |
+| probe | trained at every supervision step vs saturated s-hop target |
+| baseline | multi-task — 4 output heads, single pass, same s-hop supervision |
+| device | cuda (NVIDIA L4), torch 2.11.0+cu128 |
+| training time | TRM ~2.1 h (7,573.9 s — 36% of R=8, 63% of R=4), Baseline ~9.6 min (577.6 s) |
+| timestamp | 2026-07-27 22:17:27 (saved 2026-07-28 00:33:47) |
+
+**Results — eval by required depth K (final step accuracy; K=2, 3 are eval-only downward transfer):**
+
+| K | TRM | Baseline | Delta | Chance (1/16) |
+|---|---|---|---|---|
+| 2 | 0.99998 | **1.000** | −0.00002 | 0.0625 |
+| 3 | **1.000** | **1.000** | 0.000 | 0.0625 |
+| 4 | **1.000** | **1.000** | 0.000 | 0.0625 |
+
+**Training curve (TRM):** the now-familiar shape — chance through epoch 3, phase transition at epoch 4 (train acc 98.7%), second loss regime-drop at epochs 13–14 (0.18 → 0.0006 → ~0), val 100% at every check. Baseline unchanged (transition at epoch 6–7).
+
+**Per-step eval accuracy (TRM):** **1.000 at every outer step for every K, including step 0** — identical to R=8 and R=4. Quartering the anchor's inner budget still did not move the emergence step.
+
+**Diagnostics (TRM, post-training):**
+
+| Step | z norm | y norm | z cosine | halt prob | z_taskdecode | z_aux | z_probe | y-decode |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 10.795 | 18.407 | — | 1.000 | 0.086 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 1 | 10.856 | 36.896 | 0.201 | 1.000 | 0.066 | **1.000** ← supervised | **1.000** ← supervised | **1.000** |
+| 2 | 10.837 | 56.995 | 0.449 | 1.000 | 0.072 | **1.000** ← supervised | **0.983** ← supervised | **1.000** |
+| 3 | 10.818 | 79.895 | 0.938 | 1.000 | **1.000** | 0.072 | **0.988** | **1.000** |
+| 4 | 10.805 | 104.145 | 0.982 | 1.000 | **1.000** | 0.072 | **1.000** | **1.000** |
+| 5 | 10.799 | 128.906 | 0.994 | 1.000 | **1.000** | 0.071 | **1.000** | **1.000** |
+| 6 | 10.795 | 153.769 | 0.998 | 1.000 | **1.000** | 0.069 | **1.000** | **1.000** |
+| 7 | 10.793 | 178.559 | 0.999 | 1.000 | **1.000** | 0.069 | **1.000** | **1.000** |
+
+z_aux softmax entropy: 0 through step 3, then a slow rise 0.008 → 0.29 across steps 4–7 — the flattest free-step drift of the sweep (R=4: 0.28 → 0.88; R=8: 0.30 → 0.35).
+
+**Key findings:**
+
+1. **The front-loading hypothesis's degradation prediction fails at R=2: 100% at K=2/3/4 with the answer still in y at outer step 0.** Two inner z-updates — each a single pass through the 2-layer transformer — suffice to place the completed 4-hop composition in y within the first outer step. The "one hop per inner z-update" assumption behind the sweep's arithmetic is wrong: the network composes more than one hop per inner update (4 transformer layers total at step 0 apparently suffice for 4 map lookups/compositions).
+
+2. **Every internal signature remains R-invariant: the z_taskdecode chance → 1.000 flip at exactly step 3** (fourth consecutive run: pc-r007, R=8, R=4, R=2), halt_prob 1.0 everywhere, z_probe ≥ 0.983 at all steps, y-decode 1.0 at all steps. The converged solution's structure is indistinguishable across a 4× compute range; only training wall-clock changes (roughly linear in R).
+
+3. **The step-3 z_taskdecode flip is now strongly dissociated from compute: it cannot be the moment the composition "finishes" (y already has the answer at step 0 at every R).** It tracks the absolute-arm supervision boundary — z stays pinned to s-hop supervision coordinates while supervised (steps 0–2) and relaxes into y-decodable output coordinates exactly when supervision ends. It is a property of the training scheme, not of the computation's depth.
+
+4. **Minor cracks at the supervision boundary, for the first time in the sweep: z_probe dips to 0.983/0.988 at steps 2–3** (1.000 everywhere at R=4; ≥0.992 at R=8), and one K=2 eval item missed (0.99998). Sub-percent effects, but the only movement in any metric so far as R shrinks — consistent with mild pressure on z's carrying capacity per outer step.
+
+5. **Training time scales roughly linearly with R** (20,915 s → 11,964 s → 7,574 s for R=8/4/2) at unchanged final quality — at this task size, the extra inner recursion depth buys nothing measurable.
+
+**Interpretation:**
+
+R=2 breaks the sweep's intended dichotomy: accuracy neither degraded (ruling out the version of front-loading that needs ≥4 inner updates) nor did emergence move to later outer steps (ruling out outer-loop hop-clock iteration). Instead the evidence now favors a *shallow parallel-composition circuit*: the 2-layer transformer composes multiple hops per inner update — plausibly via attention pairing maps (perm₂∘perm₁ and perm₄∘perm₃ in one pass, then their composition), needing only ~2 applications for K=4. The outer supervision loop contributes training structure (the s-hop targets shape z at steps 0–2) but no run-time iteration. R=1 is now the last and sharpest test: a single inner z-update per outer step (2 transformer layers) — if even that solves K=4 at step 0, the recursion is doing all composition within one forward pass and the "latent recursion" framing reduces to a trained fixed-depth circuit plus a supervision schedule.
+
+**Next experiment:** pc-r011 — R=1, the final sweep point, same config, changing only `n_recursions`. Then the arm/seed matrix (transition arm; seeds 43/44) remains queued.
+
+**Plots:**
+- ![Acc vs K](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_acc_vs_K.png)
+- ![Per-step by K](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_per_step_by_K.png)
+- ![Training curves](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_training_curves.png)
+- ![Z-state evolution](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_z_state.png)
+- ![Scratchpad](results/exp-pointer_chase-r010/pc-r010_absolute_s42_nrec2_20260727_221727_scratchpad.png)
+
+---
